@@ -1,0 +1,7 @@
+*.nc 
+*.out
+*.png
+code/*.nc
+code/*.out
+plot/*.png
+output/*.nc 

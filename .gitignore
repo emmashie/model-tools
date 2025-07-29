@@ -4,4 +4,7 @@
 code/*.nc
 code/*.out
 plot/*.png
-output/*.nc 
+output/*.nc
+__pycache__
+code/__pycache__/*.pyc
+ 

@@ -189,8 +189,9 @@ for t in range(nt):
     if np.mod(t, 100) == 0:
         print(f"Interpolated time step {t+1}/{nt}")
 
-# === Write interpolated surface forcing variables to NetCDF using xarray ===
+time_days_since_2000 = (time.values - np.datetime64('2000-01-01T00:00:00')) / np.timedelta64(1, 'D')
 
+# === Write interpolated surface forcing variables to NetCDF using xarray ===
 # Prepare coordinates
 eta_rho, xi_rho = ny_rho, nx_rho
 output_file = os.path.join(base_path, 'output', 'surface_forcing.nc')
@@ -198,61 +199,40 @@ output_file = os.path.join(base_path, 'output', 'surface_forcing.nc')
 ds = xr.Dataset(
     {
         'swrad': (['time', 'eta_rho', 'xi_rho'], swrad_interp, {
-            '_FillValue': np.nan,
             'long_name': 'downward short-wave (solar) radiation',
             'units': 'W/m^2',
-            'coordinates': 'abs_time expver number',
         }),
         'lwrad': (['time', 'eta_rho', 'xi_rho'], lwrad_interp, {
-            '_FillValue': np.nan,
             'long_name': 'downward long-wave (thermal) radiation',
             'units': 'W/m^2',
-            'coordinates': 'abs_time expver number',
         }),
         'Tair': (['time', 'eta_rho', 'xi_rho'], Tair_interp, {
-            '_FillValue': np.nan,
             'long_name': 'air temperature at 2m',
             'units': 'degrees Celsius',
-            'coordinates': 'abs_time expver number',
         }),
         'qair': (['time', 'eta_rho', 'xi_rho'], qair_interp, {
-            '_FillValue': np.nan,
             'long_name': 'absolute humidity at 2m',
             'units': 'kg/kg',
-            'coordinates': 'abs_time expver number',
         }),
         'rain': (['time', 'eta_rho', 'xi_rho'], rain_interp, {
-            '_FillValue': np.nan,
             'long_name': 'total precipitation',
             'units': 'cm/day',
-            'coordinates': 'abs_time expver number',
         }),
         'uwnd': (['time', 'eta_rho', 'xi_rho'], uwnd_interp, {
-            '_FillValue': np.nan,
             'long_name': '10 meter wind in x-direction',
             'units': 'm/s',
-            'coordinates': 'abs_time expver number',
         }),
         'vwnd': (['time', 'eta_rho', 'xi_rho'], vwnd_interp, {
-            '_FillValue': np.nan,
             'long_name': '10 meter wind in y-direction',
             'units': 'm/s',
-            'coordinates': 'abs_time expver number',
         }),
         'Pair': (['time', 'eta_rho', 'xi_rho'], Pair_interp, {
-            '_FillValue': np.nan,
             'long_name': 'mean sea level pressure',
             'units': 'mbar',
-            'coordinates': 'abs_time expver number',
-        }),
-        'time': (['time'], relative_time_days, {
-            '_FillValue': np.nan,
-            'long_name': 'relative time: days since 2000-01-01 00:00:00',
-            'units': 'days',
         }),
     },
     coords={
-        'time': ('time', np.arange(nt)),
+        'time': ('time', time_days_since_2000),
         'eta_rho': ('eta_rho', np.arange(eta_rho)),
         'xi_rho': ('xi_rho', np.arange(xi_rho)),
     },

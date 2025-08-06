@@ -31,7 +31,7 @@ flag = {'west': False, 'east': True, 'north': True, 'south': True}
 
 # set time range 
 start_time = pd.Timestamp("2024-01-01 00:00:00")
-end_time = pd.Timestamp("2024-01-02 00:00:00")
+end_time = pd.Timestamp("2024-01-01 03:00:00")
 
 # load boundary condition data
 bc_data = xr.open_mfdataset(os.path.join(forcing_datapath, 'GLORYS_data', 'GLORYS_*.nc'))
@@ -131,19 +131,18 @@ for t in range(nt):
 output_nc = os.path.join(base_path, 'output', 'clim_%s.nc' % str(bc_data.time[0].values)[:10])
 ds = xr.Dataset(
     {
-        'temp': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), temp_interp[np.newaxis, :, :, :]),
-        'salt': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), salt_interp[np.newaxis, :, :, :]),
-        'u': (('ocean_time', 's_rho', 'eta_rho', 'xi_u'), u_interp[np.newaxis, :, :, :] if 'u_interp' in locals() else np.full((1, s_rho, eta_rho, xi_u), np.nan)),
-        'v': (('ocean_time', 's_rho', 'eta_v', 'xi_rho'), v_interp[np.newaxis, :, :, :] if 'v_interp' in locals() else np.full((1, s_rho, eta_v, xi_rho), np.nan)),
-        'w': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), np.full((1, s_rho, eta_rho, xi_rho), np.nan)),
-        'Cs_r': (('ocean_time', 's_rho'), grid.Cs_r.values[np.newaxis, :]),
-        'Cs_w': (('ocean_time', 's_w'), grid.Cs_w.values[np.newaxis, :]),
-        'zeta': (('ocean_time', 'eta_rho', 'xi_rho'), np.full((1, eta_rho, xi_rho), np.nan)),
-        'ubar': (('ocean_time', 'eta_rho', 'xi_u'), np.full((1, eta_rho, xi_u), np.nan)),
-        'vbar': (('ocean_time', 'eta_v', 'xi_rho'), np.full((1, eta_v, xi_rho), np.nan)),
+        'temp': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), temp_interp),
+        'salt': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), salt_interp),
+        'u': (('ocean_time', 's_rho', 'eta_rho', 'xi_u'), u_interp),
+        'v': (('ocean_time', 's_rho', 'eta_v', 'xi_rho'), v_interp),
+        'Cs_r': (('s_rho'), grid.Cs_r.values),
+        'Cs_w': (('s_w'), grid.Cs_w.values),
+        'zeta': (('ocean_time', 'eta_rho', 'xi_rho'), zeta_interp),
+        'ubar': (('ocean_time', 'eta_rho', 'xi_u'), np.full((4, eta_rho, xi_u), np.nan)),
+        'vbar': (('ocean_time', 'eta_v', 'xi_rho'), np.full((4, eta_v, xi_rho), np.nan)),
     },
     coords={
-        'ocean_time': [seconds_since_2000 / 86400.0],
+        'ocean_time': seconds_since_2000 / 86400.0,
         's_rho': np.arange(s_rho),
         'eta_rho': np.arange(eta_rho),
         'xi_rho': np.arange(xi_rho),
@@ -152,9 +151,7 @@ ds = xr.Dataset(
         's_w': np.arange(s_w),
     },
     attrs={
-        'title': "ROMS initial conditions file created by model-tools",
-        'roms_tools_version': "2.4.0",
-        'ini_time': "2024-01-01 00:00:00",
+        'title': "ROMS climatology file created by model-tools",
         'model_reference_date': "2000-01-01 00:00:00",
         'source': "GLORYS",
         'theta_s': grid.theta_s,
@@ -167,7 +164,6 @@ ds['temp'].attrs = dict(long_name="potential temperature", units="degrees Celsiu
 ds['salt'].attrs = dict(long_name="salinity", units="PSU", coordinates="ocean_time")
 ds['u'].attrs = dict(long_name="u-flux component", units="m/s", coordinates="ocean_time")
 ds['v'].attrs = dict(long_name="v-flux component", units="m/s", coordinates="ocean_time")
-ds['w'].attrs = dict(long_name="w-flux component", units="m/s", coordinates="ocean_time")
 ds['Cs_r'].attrs = dict(long_name="Vertical stretching function at rho-points", units="nondimensional", coordinates="ocean_time")
 ds['Cs_w'].attrs = dict(long_name="Vertical stretching function at w-points", units="nondimensional", coordinates="ocean_time")
 ds['zeta'].attrs = dict(long_name="sea surface height", units="m", coordinates="ocean_time")

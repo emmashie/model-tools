@@ -13,4 +13,4 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --gpu-bind=none
 
-python /global/cfs/cdirs/m4304/enuss/model-tools/code/boundary_conditions.py
+python /global/cfs/cdirs/m4304/enuss/model-tools/code/boundary_condtions.py

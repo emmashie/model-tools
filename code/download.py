@@ -6,11 +6,11 @@ from typing import Tuple
 class Downloader:
     """Class responsible for downloading SRTM15+ bathymetry data."""
 
-    def __init__(self, base_url: str = "https://topex.ucsd.edu/cgi-bin/get_srtm15.cgi"):
-        """Initializes the Downloader with a base URL for SRTM15+ data download.
+    def __init__(self, base_url: str = "https://example.com/srtm15plus"):
+        """Initializes the Downloader with a base URL for data download.
 
         Args:
-            base_url (str): The base URL for downloading data. Defaults to SRTM15+ URL.
+            base_url (str): The base URL for downloading data. Defaults to a placeholder URL.
         """
         self.base_url = base_url
 

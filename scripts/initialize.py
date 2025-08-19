@@ -229,4 +229,5 @@ ds['Cs_w'].attrs = dict(long_name="Vertical stretching function at w-points", un
 ds['zeta'].attrs = dict(long_name="sea surface height", units="m", coordinates="ocean_time")
 ds['ubar'].attrs = dict(long_name="vertically integrated u-flux component", units="m/s", coordinates="ocean_time")
 ds['vbar'].attrs = dict(long_name="vertically integrated v-flux component", units="m/s", coordinates="ocean_time")
+ds['ocean_time'].attrs = dict(long_name='relative time: days since 2000-01-01 00:00:00', units='days')
 ds.to_netcdf(output_nc, format='NETCDF4', engine='netcdf4')

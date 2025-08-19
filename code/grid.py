@@ -36,6 +36,19 @@ class grid_tools:
         return grad_y, grad_x, grad_magnitude, r
 
     @staticmethod
+    def compute_rx1(h):
+        """
+        Compute rx1 (Haney parameter) for ROMS grid stiffness.
+        """
+        # rx1 in x-direction (between i and i+1)
+        rx1_x = np.abs(np.diff(h, axis=1)) / (h[:, :-1] + h[:, 1:])
+        
+        # rx1 in y-direction (between j and j+1) 
+        rx1_y = np.abs(np.diff(h, axis=0)) / (h[:-1, :] + h[1:, :])
+        
+        return rx1_x, rx1_y
+
+    @staticmethod
     def compute_sigma(N, type='r'):
         if type=='r':
             k = np.arange(1, N + 1)

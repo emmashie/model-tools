@@ -80,7 +80,7 @@ f = 2 * 7.2921159e-5 * np.sin(lat_rho_rad)
 
 # Smooth the log of the bathymetry
 bathy_masked = np.ma.masked_where(bathy > 0, bathy)
-bathy_smooth = mod_utils.spatially_avg(np.log(np.abs(bathy_masked)), lon, lat, order=1, filtx=dx, filty=dy)
+bathy_smooth = mod_utils.spatially_avg(np.log(np.abs(bathy_masked)), lon, lat, order=1, filtx=dx*5, filty=dy*5)
 bathy_smooth = -np.exp(bathy_smooth)  # Convert back to depth
 bathy_smooth = np.where(bathy_masked.mask, bathy, bathy_smooth)
 
@@ -106,6 +106,7 @@ h[h > hmin] = hmin
 h = np.nan_to_num(h, nan=hmin)
 
 grad_y, grad_x, grad, r = grid_tools.compute_slope_factor(h, dx=dx_m, dy=dy_m)
+rx1_x, rx1_y = grid_tools.compute_rx1(h)
 
 r = np.nan_to_num(r, nan=0.0)
 r_big_indy, r_big_indx = np.where(r>0.2)

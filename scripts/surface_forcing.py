@@ -95,41 +95,43 @@ output_file = os.path.join(base_path, 'output', 'surface_forcing.nc')
 
 ds = xr.Dataset(
     {
-        'swrad': (['time', 'eta_rho', 'xi_rho'], swrad_interp, {
+        'swrad': (['ocean_time', 'eta_rho', 'xi_rho'], swrad_interp, {
             'long_name': 'downward short-wave (solar) radiation',
             'units': 'W/m^2',
         }),
-        'lwrad': (['time', 'eta_rho', 'xi_rho'], lwrad_interp, {
+        'lwrad': (['ocean_time', 'eta_rho', 'xi_rho'], lwrad_interp, {
             'long_name': 'downward long-wave (thermal) radiation',
             'units': 'W/m^2',
         }),
-        'Tair': (['time', 'eta_rho', 'xi_rho'], Tair_interp, {
+        'Tair': (['ocean_time', 'eta_rho', 'xi_rho'], Tair_interp, {
             'long_name': 'air temperature at 2m',
             'units': 'degrees Celsius',
         }),
-        'qair': (['time', 'eta_rho', 'xi_rho'], qair_interp, {
+        'qair': (['ocean_time', 'eta_rho', 'xi_rho'], qair_interp, {
             'long_name': 'absolute humidity at 2m',
             'units': 'kg/kg',
         }),
-        'rain': (['time', 'eta_rho', 'xi_rho'], rain_interp, {
+        'rain': (['ocean_time', 'eta_rho', 'xi_rho'], rain_interp, {
             'long_name': 'total precipitation',
             'units': 'cm/day',
         }),
-        'uwnd': (['time', 'eta_rho', 'xi_rho'], uwnd_interp, {
+        'uwnd': (['ocean_time', 'eta_rho', 'xi_rho'], uwnd_interp, {
             'long_name': '10 meter wind in x-direction',
             'units': 'm/s',
         }),
-        'vwnd': (['time', 'eta_rho', 'xi_rho'], vwnd_interp, {
+        'vwnd': (['ocean_time', 'eta_rho', 'xi_rho'], vwnd_interp, {
             'long_name': '10 meter wind in y-direction',
             'units': 'm/s',
         }),
-        'Pair': (['time', 'eta_rho', 'xi_rho'], Pair_interp, {
+        'Pair': (['ocean_time', 'eta_rho', 'xi_rho'], Pair_interp, {
             'long_name': 'mean sea level pressure',
             'units': 'mbar',
         }),
     },
     coords={
-        'time': ('time', time_days_since_2000),
+        'ocean_time': ('ocean_time', time_days_since_2000, {
+            'units': 'days since 2000-01-01 00:00:00',
+        }),
         'eta_rho': ('eta_rho', np.arange(eta_rho)),
         'xi_rho': ('xi_rho', np.arange(xi_rho)),
     },
@@ -142,7 +144,7 @@ ds = xr.Dataset(
     }
 )
 
-# Write to NetCDF
+# Write to NetCDF 
 ds.to_netcdf(output_file, format='NETCDF4', encoding={var: {'_FillValue': np.nan} for var in ds.data_vars})
 print(f"Surface forcing NetCDF file written: {output_file}")
 

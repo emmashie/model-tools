@@ -36,17 +36,76 @@ class grid_tools:
         return grad_y, grad_x, grad_magnitude, r
 
     @staticmethod
-    def compute_rx1(h):
+    def compute_slope_parameter(bathymetry, return_components=False, mask=None):
         """
-        Compute rx1 (Haney parameter) for ROMS grid stiffness.
+        Vectorized version of slope parameter computation for better performance.
         """
-        # rx1 in x-direction (between i and i+1)
-        rx1_x = np.abs(np.diff(h, axis=1)) / (h[:, :-1] + h[:, 1:])
+        bathymetry = np.asarray(bathymetry, dtype=float)
+        ni, nj = bathymetry.shape
         
-        # rx1 in y-direction (between j and j+1) 
-        rx1_y = np.abs(np.diff(h, axis=0)) / (h[:-1, :] + h[1:, :])
+        # Apply mask if provided
+        if mask is not None:
+            bathymetry = bathymetry.copy()
+            bathymetry[~mask] = np.nan
         
-        return rx1_x, rx1_y
+        # Set non-positive depths to NaN
+        bathymetry[bathymetry <= 0] = np.nan
+        
+        # Compute slope parameter in x-direction
+        hA_x = bathymetry[:, :-1]  # depths at i,j
+        hB_x = bathymetry[:, 1:]   # depths at i,j+1
+        
+        denominator_x = hA_x + hB_x
+        numerator_x = np.abs(hB_x - hA_x)
+        
+        sp_x = np.full_like(denominator_x, np.nan)
+        valid_x = (denominator_x > 0) & ~np.isnan(denominator_x)
+        sp_x[valid_x] = numerator_x[valid_x] / denominator_x[valid_x]
+        
+        # Compute slope parameter in y-direction
+        hA_y = bathymetry[:-1, :]  # depths at i,j
+        hB_y = bathymetry[1:, :]   # depths at i+1,j
+        
+        denominator_y = hA_y + hB_y
+        numerator_y = np.abs(hB_y - hA_y)
+        
+        sp_y = np.full_like(denominator_y, np.nan)
+        valid_y = (denominator_y > 0) & ~np.isnan(denominator_y)
+        sp_y[valid_y] = numerator_y[valid_y] / denominator_y[valid_y]
+        
+        if return_components:
+            # Compute maximum at overlapping points
+            sp_x_pad = np.full((ni, nj), np.nan)
+            sp_x_pad[:, :-1] = sp_x
+            
+            sp_y_pad = np.full((ni, nj), np.nan)
+            sp_y_pad[:-1, :] = sp_y
+            
+            # Maximum over 2x2 neighborhoods
+            sp_max = np.nanmax(np.stack([
+                sp_x_pad[:-1, :-1],  # sp_x at i,j
+                sp_x_pad[1:, :-1],   # sp_x at i+1,j
+                sp_y_pad[:-1, :-1],  # sp_y at i,j
+                sp_y_pad[:-1, 1:]    # sp_y at i,j+1
+            ]), axis=0)
+            
+            return sp_max, sp_x, sp_y
+        else:
+            # Just return maximum
+            sp_x_pad = np.full((ni, nj), np.nan)
+            sp_x_pad[:, :-1] = sp_x
+            
+            sp_y_pad = np.full((ni, nj), np.nan)
+            sp_y_pad[:-1, :] = sp_y
+            
+            sp_max = np.nanmax(np.stack([
+                sp_x_pad[:-1, :-1],
+                sp_x_pad[1:, :-1],
+                sp_y_pad[:-1, :-1],
+                sp_y_pad[:-1, 1:]
+            ]), axis=0)
+            
+            return sp_max
 
     @staticmethod
     def compute_sigma(N, type='r'):

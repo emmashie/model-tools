@@ -35,7 +35,7 @@ bc_data = xr.open_mfdataset(os.path.join(forcing_datapath, 'GLORYS_data', 'GLORY
 
 # set time range 
 start_time = bc_data['time'][24].values
-end_time = pd.Timestamp("2024-01-01 06:00:00")
+end_time = pd.Timestamp("2024-02-01 00:00:00")
 ref_time = pd.Timestamp("2000-01-01 00:00:00")
 
 # Subset bc_data to the specified time range
@@ -52,7 +52,8 @@ lat_var = 'latitude'
 lon_var = 'longitude'
 
 # Get valid time indices 
-valid_time_indices = [t for t in range(len(bc_data['time'])) if np.isfinite(bc_data['uo'][t, :, :, :].values).any()]
+valid_time_indices = np.where(np.isfinite(bc_data['uo'][:,0,-1,-1].values))[0]
+#valid_time_indices = [t for t in range(len(bc_data['time'])) if np.isfinite(bc_data['uo'][t, :, :, :].values).any()]
 print(f"Indices of time steps with any finite 'uo' values: {valid_time_indices}")
 
 # Get grid dimensions 
@@ -139,6 +140,17 @@ for t in range(nt):
         zeta_data, glorys_lon_2d, glorys_lat_2d, roms_lon_2d, roms_lat_2d, method='linear'
     )
     print("Interpolated time step %d/%d" % (t + 1, nt))
+
+# fill nans with values 
+fill_value = 0
+zeta_interp = np.where(np.isnan(zeta_interp), fill_value, zeta_interp)
+fill_value = 5
+temp_interp = np.where(np.isnan(temp_interp), fill_value, temp_interp)
+fill_value = 32.0   
+sal_interp = np.where(np.isnan(salt_interp), fill_value, salt_interp)
+fill_value = 0
+u_interp = np.where(np.isnan(u_interp), fill_value, u_interp)
+v_interp = np.where(np.isnan(v_interp), fill_value, v_interp)
 
 ## calculate ubar, vbar, and w  
 z_rho = np.transpose(z_rho, (2, 0, 1))

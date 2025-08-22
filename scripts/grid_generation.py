@@ -80,7 +80,7 @@ f = 2 * 7.2921159e-5 * np.sin(lat_rho_rad)
 
 # Smooth the log of the bathymetry
 bathy_masked = np.ma.masked_where(bathy > 0, bathy)
-bathy_smooth = mod_utils.spatially_avg(np.log(np.abs(bathy_masked)), lon, lat, order=1, filtx=dx*5, filty=dy*5)
+bathy_smooth = mod_utils.spatially_avg(np.log(np.abs(bathy_masked)), lon, lat, order=1, filtx=dx*10, filty=dy*10)
 bathy_smooth = -np.exp(bathy_smooth)  # Convert back to depth
 bathy_smooth = np.where(bathy_masked.mask, bathy, bathy_smooth)
 
@@ -106,7 +106,7 @@ h[h > hmin] = hmin
 h = np.nan_to_num(h, nan=hmin)
 
 grad_y, grad_x, grad, r = grid_tools.compute_slope_factor(h, dx=dx_m, dy=dy_m)
-rx1_x, rx1_y = grid_tools.compute_rx1(h)
+sp = grid_tools.compute_slope_parameter(-h)
 
 r = np.nan_to_num(r, nan=0.0)
 r_big_indy, r_big_indx = np.where(r>0.2)
@@ -266,3 +266,33 @@ ds_out.attrs = {
 
 # Save to NetCDF file
 ds_out.to_netcdf(os.path.join(base_path, 'output', output_nc))
+
+
+fig, ax = plt.subplots(figsize=(10, 6))
+c = ax.pcolormesh(lon_rho_grid[1:,1:], lat_rho_grid[1:,1:], sp, cmap=cmocean.cm.deep, shading='auto')
+ax.set_xlabel('Longitude')
+ax.set_ylabel('Latitude')
+cb = fig.colorbar(c, ax=ax, label='Slope Parameter')
+ax.set_aspect('auto')
+c.set_clim(0,0.2)
+
+plot_dir = os.path.join(base_path, 'plots')
+os.makedirs(plot_dir, exist_ok=True)
+plot_path = os.path.join(plot_dir, 'roms_grid_slope_parameter.png')
+plt.savefig(plot_path, dpi=200, bbox_inches='tight')
+plt.close(fig)
+
+fig, ax = plt.subplots(figsize=(10, 6))
+c = ax.pcolormesh(lon_rho_grid, lat_rho_grid, -h, cmap=cmocean.cm.deep, shading='auto')
+yind, xind = np.where(sp > 0.2)
+ax.scatter(lon_rho_grid[yind, xind], lat_rho_grid[yind, xind], color='red', s=1, label='Slope > 0.2')
+ax.set_xlabel('Longitude')
+ax.set_ylabel('Latitude')
+cb = fig.colorbar(c, ax=ax, label='Depth')
+ax.set_aspect('auto')
+
+plot_dir = os.path.join(base_path, 'plots')
+os.makedirs(plot_dir, exist_ok=True)
+plot_path = os.path.join(plot_dir, 'roms_grid_bathy.png')
+plt.savefig(plot_path, dpi=200, bbox_inches='tight')
+plt.close(fig)

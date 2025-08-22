@@ -117,6 +117,8 @@ temp_interp[zind, yind, xind] = tmin  # Set negative values to minimum temperatu
 # Mask temp_interp with grid.mask_rho (1=water, 0=land)
 mask = grid.mask_rho.values.astype(bool)
 temp_interp = np.where(mask, temp_interp, np.nan)
+fill_value = 5
+temp_interp = np.where(np.isnan(temp_interp), fill_value, temp_interp)
 
 print(f"Interpolated temperature shape: {temp_interp.shape}")
 
@@ -132,7 +134,9 @@ sal_interp = interp_tools.interp3d(
 )
 
 # Mask sal_interp with grid.mask_rho (1=water, 0=land)
-sal_interp = np.where(mask, sal_interp, np.nan)
+#sal_interp = np.where(mask, sal_interp, np.nan)
+fill_value = 32.0  # Typical ocean salinity
+sal_interp = np.where(np.isnan(sal_interp), fill_value, sal_interp)
 
 print(f"Interpolated salinity shape: {sal_interp.shape}")
 
@@ -164,8 +168,12 @@ v_interp = interp_tools.interp3d(
 # Mask with grid
 mask_u = grid.mask_u.values.astype(bool)
 mask_v = grid.mask_v.values.astype(bool)
-u_interp = np.where(mask_u, u_interp, np.nan)
-v_interp = np.where(mask_v, v_interp, np.nan)
+#u_interp = np.where(mask_u, u_interp, np.nan)
+#v_interp = np.where(mask_v, v_interp, np.nan)
+fill_value = 0
+u_interp = np.where(np.isnan(u_interp), fill_value, u_interp)
+v_interp = np.where(np.isnan(v_interp), fill_value, v_interp)
+
 print(f"Interpolated u velocity shape: {u_interp.shape}")
 print(f"Interpolated v velocity shape: {v_interp.shape}")
 
@@ -183,6 +191,8 @@ zeta_data = zeta_data[0, :, :]
 zeta_interp = interp_tools.interp2d(
     zeta_data, glorys_lon_2d, glorys_lat_2d, roms_lon_2d, roms_lat_2d, method='linear'
 )
+fill_value = 0 
+zeta_interp = np.where(np.isnan(zeta_interp), fill_value, zeta_interp)
 
 output_nc = os.path.join(base_path, 'output', 'initial_conditions.nc')
 ds = xr.Dataset(

@@ -40,10 +40,12 @@ relative_time_days = (time.values - ref_time) / np.timedelta64(1, 'D')
 
 # Compute time delta in seconds from time variable
 dt = (time[1] - time[0]).astype('timedelta64[s]').values
+dt = dt.astype(float)
 
-swrad = convert_tools.convert_to_energy_density(era5[shortwave].values, dt)
-lwrad = convert_tools.convert_to_energy_density(era5[longwave].values, dt)
-Tair = convert_tools.convert_K_to_C(era5[sst].values)
+swrad = convert_tools.convert_to_flux_density(era5[shortwave].values, dt)
+lwrad = convert_tools.convert_to_flux_density(era5[longwave].values, dt)
+Tair = convert_tools.convert_K_to_C(era5[sst].values) 
+Tair = np.nan_to_num(Tair, nan=np.nanmean(Tair))
 qair = convert_tools.compute_relative_humidity(era5[airtemp].values, era5[dewpoint].values)
 Pair = convert_tools.convert_Pa_to_mbar(era5_pair[press].values)
 rain = convert_tools.compute_rainfall_cm_per_day(era5[precip].values, dt.astype(float))

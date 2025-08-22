@@ -33,6 +33,19 @@ class convert_tools:
         return energy_density
 
     @staticmethod
+    def convert_to_flux_density(energy_jm2, time_interval):
+        """
+        Converts energy from J/m² to W/m² given a time interval.
+        Parameters:
+            energy_jm2 (array-like): Energy values in J/m² (can be 1D, 2D, or 3D: [nt, ny, nx]).
+            time_interval (float): Time interval in seconds over which the energy is measured.
+        Returns:
+            array-like: Flux values converted to W/m², same shape as input.
+        """
+        flux_density = np.asarray(energy_jm2) / time_interval
+        return flux_density
+
+    @staticmethod
     def calculate_surface_wind(u10_value, z0=0.0002, z_ref=10):
         """Calculate surface wind speed at a reference height using the logarithmic wind profile."""
         return u10_value * (np.log(z0) / np.log(z_ref / z0))

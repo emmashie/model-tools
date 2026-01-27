@@ -38,7 +38,7 @@ def download_east_coast_bathymetry(output_dir="."):
 if __name__ == "__main__":
     download_east_coast_bathymetry()
 
-    def plot_bathymetry(nc_file):
+    def plot_bathymetry(nc_file, plot_dir="."):
         import matplotlib.pyplot as plt
 
         ds = xr.open_dataset(nc_file)
@@ -50,10 +50,12 @@ if __name__ == "__main__":
         plt.title('East Coast Bathymetry')
         plt.xlabel('Longitude')
         plt.ylabel('Latitude')
-        plt.savefig('east_coast_bathymetry.png', dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(plot_dir, 'east_coast_bathymetry.png'), dpi=300, bbox_inches='tight')
         plt.close()
         ds.close()
 
     if __name__ == "__main__":
-        download_east_coast_bathymetry()
-        plot_bathymetry("east_coast_bathy_final.nc")
+        output_dir = "/global/cfs/cdirs/m4304/enuss/model-tools/output"
+        download_east_coast_bathymetry(output_dir)
+        plot_dir = "/global/cfs/cdirs/m4304/enuss/model-tools/plots"
+        plot_bathymetry(os.path.join(output_dir, "east_coast_bathy_final.nc"), plot_dir)

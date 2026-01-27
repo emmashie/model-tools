@@ -28,9 +28,8 @@ grid_nc = 'roms_grid_1km_smoothed.nc'
 forcing_datapath = '/global/cfs/cdirs/m4304/enuss/US_East_Coast/Forcing_Data'
 
 # Time range for forcing
-start_time = np.datetime64('2024-12-01T00:00:00')
-#end_time = np.datetime64('2025-01-01T00:00:00')
-end_time = np.datetime64('2024-12-02T00:00:00')
+start_time = np.datetime64('2024-01-01T00:00:00')
+end_time = np.datetime64('2024-01-02T00:00:00')
 
 # Output file
 output_file = os.path.join(base_path, 'output', 'surface_forcing.nc')

@@ -1,84 +1,89 @@
-from interpolate import interp_tools 
-from conversions import convert_tools
-from grid import grid_tools
 import xarray as xr
 import numpy as np
-import cmocean
-import matplotlib.pyplot as plt
-from scipy.interpolate import griddata
-import hvplot.xarray
-import geoviews as gv
-import os 
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-from matplotlib.colors import ListedColormap, LinearSegmentedColormap
+import sys
+import os
+
+# Add parent directory to path to import from code/
+try:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    code_dir = os.path.join(os.path.dirname(script_dir), 'code')
+except NameError:
+    code_dir = '/global/cfs/cdirs/m4304/enuss/model-tools/code'
+
+if code_dir not in sys.path:
+    sys.path.insert(0, code_dir)
+
+from conversions import convert_tools
+from initialization import init_tools
+from boundary import boundary_tools
+from grid import grid_tools
 import pandas as pd
- 
+
+# ========== Location-Specific Parameters ==========
+# Specify which boundaries to include
+boundaries = {
+    'west': False,
+    'east': True,
+    'north': True,
+    'south': True
+}
+
+# Time range for boundary conditions
+start_time = '2024-1-01'  # bc_data['time'][24].values
+end_time = '2024-1-02'
+
+# Output options
+save_climatology = True  # Set to False to skip climatology file creation
+save_boundary = True     # Set to False to skip boundary forcing file creation
+
+# File paths
 base_path = '/global/cfs/cdirs/m4304/enuss/model-tools'
-grid_nc = 'roms_grid_1km_smoothed.nc' 
 forcing_datapath = '/global/cfs/cdirs/m4304/enuss/US_East_Coast/Forcing_Data'
+grid_file = os.path.join(base_path, 'output', 'roms_grid_1km_smoothed.nc')
+glorys_data_pattern = os.path.join(forcing_datapath, 'GLORYS_data', 'GLORYS_*.nc')
+output_climatology_file = os.path.join(base_path, 'output', 'east-coast-climatology_2023-2024.nc')
+output_boundary_file = os.path.join(base_path, 'output', 'east-coast-boundary_2023-2024.nc')
 
-grid = xr.open_dataset(os.path.join(base_path, 'output', grid_nc))
+# Source data name
+source_name = 'GLORYS12v1'
 
-# grid range 
-lat_min = grid.lat_rho.min().values
-lat_max = grid.lat_rho.max().values
-lon_min = grid.lon_rho.min().values
-lon_max = grid.lon_rho.max().values
+# Model reference time
+ref_time = '2000-01-01 00:00:00'
 
-# set which boundaries need data 
-boundaries = ['west', 'east', 'north', 'south'] 
-flag = {'west': False, 'east': True, 'north': True, 'south': True}
 
-# load boundary condition data
-bc_data = xr.open_mfdataset(os.path.join(forcing_datapath, 'GLORYS_data', 'GLORYS_*.nc'))
-
-# set time range 
-start_time = bc_data['time'][24].values
-end_time = pd.Timestamp("2024-02-01 00:00:00")
-ref_time = pd.Timestamp("2000-01-01 00:00:00")
+print("Loading data...")
+# Load grid and boundary condition data
+grid = xr.open_dataset(grid_file)
+bc_data = xr.open_mfdataset(glorys_data_pattern)
 
 # Subset bc_data to the specified time range
 bc_data = bc_data.sel(time=slice(start_time, end_time))
 
-# Set variable names
+# Set variable names for GLORYS data
 salt_var = 'so'
 temp_var = 'thetao' 
 u_var = 'uo'
 v_var = 'vo'
 zeta_var = 'zos'
-depth = 'depth'
+depth_var = 'depth'
 lat_var = 'latitude'
 lon_var = 'longitude'
 
-# Get valid time indices 
+# Get valid time indices (where uo data is not all NaN)
 valid_time_indices = np.where(np.isfinite(bc_data['uo'][:,0,-1,-1].values))[0]
-#valid_time_indices = [t for t in range(len(bc_data['time'])) if np.isfinite(bc_data['uo'][t, :, :, :].values).any()]
-print(f"Indices of time steps with any finite 'uo' values: {valid_time_indices}")
+print(f"Found {len(valid_time_indices)} valid time steps")
 
-# Get grid dimensions 
-eta_rho, xi_rho, eta_v, xi_u, s_rho, s_w = grid_tools.get_grid_dims(grid)
-
-# Get data depth
-n_depth = len(bc_data[depth])
-
-# Prepare GLORYS source coordinates
-# Note: GLORYS depths are typically positive downward, ROMS depths are negative upward
-glorys_depth = bc_data[depth].values  # Assuming positive depths
-glorys_lat = bc_data[lat_var].values
-glorys_lon = bc_data[lon_var].values
-
-# Create 2D lat/lon grids for GLORYS data
-glorys_lon_2d, glorys_lat_2d = np.meshgrid(glorys_lon, glorys_lat, indexing='xy')
-
-# Create 3D depth array for GLORYS (depth varies with depth dimension, constant across lat/lon)
-# Shape: (n_lat, n_lon, n_depth)
-glorys_depth_3d = np.broadcast_to(
-    glorys_depth[np.newaxis, np.newaxis, :], 
-    (len(glorys_lat), len(glorys_lon), len(glorys_depth))
+# Prepare source coordinates using init_tools
+print("Preparing source coordinates...")
+source_coords = init_tools.prepare_source_coords(
+    bc_data, depth_var, lat_var, lon_var
 )
 
 # Compute ROMS vertical coordinates
+print("Computing ROMS vertical coordinates...")
+
+eta_rho, xi_rho, eta_v, xi_u, s_rho, s_w = grid_tools.get_grid_dims(grid)
+
 z_rho = grid_tools.compute_z(
     grid.sigma_r.values, 
     grid.hc, 
@@ -86,300 +91,123 @@ z_rho = grid_tools.compute_z(
     grid.h.values, 
     np.zeros((eta_rho, xi_rho, 1))
 )
-z_rho = np.squeeze(z_rho)  # Remove singleton dimension
+z_rho = np.squeeze(z_rho)
 z_rho = np.transpose(z_rho, (1, 2, 0))  # Shape: (eta_rho, xi_rho, s_rho)
 
-# Convert ROMS depths to positive values if they're negative (for consistent interpolation)
-roms_depth_3d = np.abs(z_rho)  # Shape: (eta_rho, xi_rho, s_rho)
-
-# Get ROMS target coordinates
-roms_lat_2d = grid.lat_rho.values  # Shape: (eta_rho, xi_rho)
-roms_lon_2d = grid.lon_rho.values  # Shape: (eta_rho, xi_rho)
-
-roms_latu_2d = grid.lat_u.values  
-roms_lonu_2d = grid.lon_u.values  
-
-roms_latv_2d = grid.lat_v.values  
-roms_lonv_2d = grid.lon_v.values  
+# Convert to positive depths for interpolation
+roms_depth_3d = np.abs(z_rho)
+roms_lat_2d = grid.lat_rho.values
+roms_lon_2d = grid.lon_rho.values
+roms_latu_2d = grid.lat_u.values
+roms_lonu_2d = grid.lon_u.values
+roms_latv_2d = grid.lat_v.values
+roms_lonv_2d = grid.lon_v.values
 
 nt = len(valid_time_indices)
-temp_interp = np.empty((nt, s_rho, eta_rho, xi_rho), dtype='float32')
-salt_interp = np.empty((nt, s_rho, eta_rho, xi_rho), dtype='float32')
-u_interp = np.empty((nt, s_rho, eta_rho, xi_u), dtype='float32')
-v_interp = np.empty((nt, s_rho, eta_v, xi_rho), dtype='float32')
-zeta_interp = np.empty((nt, eta_rho, xi_rho), dtype='float32')
-seconds_since_2000 = np.empty(nt)
 
+# Initialize arrays for interpolated variables
+print("Interpolating variables to ROMS grid...")
+
+temp_interp = np.empty((nt, s_rho, eta_rho, xi_rho))
+salt_interp = np.empty((nt, s_rho, eta_rho, xi_rho))
+u_interp = np.empty((nt, s_rho, eta_rho, xi_u))
+v_interp = np.empty((nt, s_rho, eta_v, xi_rho))
+zeta_interp = np.empty((nt, eta_rho, xi_rho))
+
+# Time in days since reference
+ref_time_pd = pd.Timestamp(ref_time)
+time_days = np.empty(nt)
+
+# Interpolate each time step
 for t in range(nt):
-    temp_data = bc_data['thetao'][valid_time_indices[t],:,:].values
-    time = bc_data['time'][valid_time_indices[t]].values
+    idx = valid_time_indices[t]
+    
+    # Calculate time in days since reference
+    time = bc_data['time'][idx].values
     current_time = pd.to_datetime(str(time))
-    seconds_since_2000[t] = (current_time - ref_time).total_seconds()
-
-    temp_interp[t] = interp_tools.interp3d(
-        temp_data, glorys_lon_2d, glorys_lat_2d, glorys_depth, roms_lon_2d, roms_lat_2d, -z_rho, method='linear'
+    time_days[t] = (current_time - ref_time_pd).total_seconds() / 86400.0
+    
+    # Interpolate 3D variables using init_tools methods
+    temp_data = bc_data[temp_var][idx, :, :, :].values
+    temp_interp[t] = init_tools.interpolate_and_mask_3d(
+        temp_data, source_coords,
+        roms_lon_2d, roms_lat_2d, roms_depth_3d, 
+        grid.mask_rho.values, fill_value=5.0
     )
-    del temp_data
-
-    salt_data = bc_data['so'][valid_time_indices[t],:,:].values
-    salt_interp[t] = interp_tools.interp3d(
-        salt_data, glorys_lon_2d, glorys_lat_2d, glorys_depth, roms_lon_2d, roms_lat_2d, -z_rho, method='linear'
+    
+    salt_data = bc_data[salt_var][idx, :, :, :].values
+    salt_interp[t] = init_tools.interpolate_and_mask_3d(
+        salt_data, source_coords,
+        roms_lon_2d, roms_lat_2d, roms_depth_3d,
+        grid.mask_rho.values, fill_value=32.0
     )
-    del salt_data
-
-    u_data = bc_data['uo'][valid_time_indices[t],:,:].values
-    u_interp[t] = interp_tools.interp3d(
-        u_data, glorys_lon_2d, glorys_lat_2d, glorys_depth, roms_lonu_2d, roms_latu_2d, -z_rho, method='linear'
+    
+    u_data = bc_data[u_var][idx, :, :, :].values
+    u_interp[t] = init_tools.interpolate_and_mask_3d(
+        u_data, source_coords,
+        roms_lonu_2d, roms_latu_2d, roms_depth_3d,
+        grid.mask_u.values, fill_value=0.0
     )
-    del u_data
-
-    v_data = bc_data['vo'][valid_time_indices[t],:,:].values
-    v_interp[t] = interp_tools.interp3d(
-        v_data, glorys_lon_2d, glorys_lat_2d, glorys_depth, roms_lonv_2d, roms_latv_2d, -z_rho, method='linear'
-    )   
-    del v_data
-
-    zeta_data = bc_data['zos'][valid_time_indices[t],0,:,:].values
-    zeta_interp[t] = interp_tools.interp2d(
-        zeta_data, glorys_lon_2d, glorys_lat_2d, roms_lon_2d, roms_lat_2d, method='linear'
+    
+    v_data = bc_data[v_var][idx, :, :, :].values
+    v_interp[t] = init_tools.interpolate_and_mask_3d(
+        v_data, source_coords,
+        roms_lonv_2d, roms_latv_2d, roms_depth_3d,
+        grid.mask_v.values, fill_value=0.0
     )
-    del zeta_data
-    print("Interpolated time step %d/%d" % (t + 1, nt))
+    
+    # Interpolate 2D zeta
+    zeta_data = bc_data[zeta_var][idx, :, :, :].values
+    surf_idx = np.where(~np.isnan(zeta_data))[0][0] if zeta_data.ndim > 2 else 0
+    zeta_data = zeta_data[surf_idx, :, :] if zeta_data.ndim > 2 else zeta_data
+    zeta_interp[t] = init_tools.interpolate_and_mask_2d(
+        zeta_data, source_coords['lon_2d'], source_coords['lat_2d'],
+        roms_lon_2d, roms_lat_2d, fill_value=0.0
+    )
+    
+    print(f"Interpolated time step {t + 1}/{nt}")
 
-# fill nans with values 
-fill_value = 0
-zeta_interp = np.where(np.isnan(zeta_interp), fill_value, zeta_interp)
-fill_value = 5
-temp_interp = np.where(np.isnan(temp_interp), fill_value, temp_interp)
-fill_value = 32.0   
-sal_interp = np.where(np.isnan(salt_interp), fill_value, salt_interp)
-fill_value = 0
-u_interp = np.where(np.isnan(u_interp), fill_value, u_interp)
-v_interp = np.where(np.isnan(v_interp), fill_value, v_interp)
-
-## calculate ubar, vbar, and w  
-z_rho = np.transpose(z_rho, (2, 0, 1))
+# Compute derived variables (ubar, vbar, w)
+print("Computing derived variables (ubar, vbar, w)...")
+z_rho_transposed = np.transpose(z_rho, (2, 0, 1))  # Shape: (s_rho, eta_rho, xi_rho)
 ubar = np.empty((nt, eta_rho, xi_u))
 vbar = np.empty((nt, eta_v, xi_rho))
-for t in range(nt):
-    ubar[t], vbar[t] = convert_tools.compute_uvbar(u_interp[t], v_interp[t], z_rho)
-
 w = np.empty((nt, s_rho, eta_rho, xi_rho))
+
 for t in range(nt):
-    w[t] = convert_tools.compute_w(u_interp[t], v_interp[t], grid.pm.values, grid.pn.values, z_rho)
+    ubar[t], vbar[t] = convert_tools.compute_uvbar(u_interp[t], v_interp[t], z_rho_transposed)
+    w[t] = convert_tools.compute_w(u_interp[t], v_interp[t], grid.pm.values, grid.pn.values, z_rho_transposed)
 
-output_nc = os.path.join(base_path, 'output', 'clim_%s.nc' % str(bc_data.time[0].values)[:10])
-ds = xr.Dataset(
-    {
-        'temp': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), temp_interp),
-        'salt': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), salt_interp),
-        'u': (('ocean_time', 's_rho', 'eta_rho', 'xi_u'), u_interp),
-        'v': (('ocean_time', 's_rho', 'eta_v', 'xi_rho'), v_interp),
-        'w': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), w),
-        'Cs_r': (('s_rho'), grid.Cs_r.values),
-        'Cs_w': (('s_w'), grid.Cs_w.values),
-        'zeta': (('ocean_time', 'eta_rho', 'xi_rho'), zeta_interp),
-        'ubar': (('ocean_time', 'eta_rho', 'xi_u'), ubar),
-        'vbar': (('ocean_time', 'eta_v', 'xi_rho'), vbar),
-    },
-    coords={
-        'ocean_time': seconds_since_2000 / 86400.0,
-        's_rho': np.arange(s_rho),
-        'eta_rho': np.arange(eta_rho),
-        'xi_rho': np.arange(xi_rho),
-        'xi_u': np.arange(xi_u),
-        'eta_v': np.arange(eta_v),
-        's_w': np.arange(s_w),
-    },
-    attrs={
-        'title': "ROMS climatology file created by model-tools",
-        'model_reference_date': "2000-01-01 00:00:00",
-        'source': "GLORYS",
-        'theta_s': grid.theta_s,
-        'theta_b': grid.theta_b,
-        'hc': grid.hc,
-    }
-)
-# Variable attributes
-ds['temp'].attrs = dict(long_name="potential temperature", units="degrees Celsius", coordinates="ocean_time")
-ds['salt'].attrs = dict(long_name="salinity", units="PSU", coordinates="ocean_time")
-ds['u'].attrs = dict(long_name="u-flux component", units="m/s", coordinates="ocean_time")
-ds['v'].attrs = dict(long_name="v-flux component", units="m/s", coordinates="ocean_time")
-ds['w'].attrs = dict(long_name="w-flux component", units="m/s", coordinates="ocean_time")
-ds['Cs_r'].attrs = dict(long_name="Vertical stretching function at rho-points", units="nondimensional", coordinates="ocean_time")
-ds['Cs_w'].attrs = dict(long_name="Vertical stretching function at w-points", units="nondimensional", coordinates="ocean_time")
-ds['zeta'].attrs = dict(long_name="sea surface height", units="m", coordinates="ocean_time")
-ds['ubar'].attrs = dict(long_name="vertically integrated u-flux component", units="m/s", coordinates="ocean_time")
-ds['vbar'].attrs = dict(long_name="vertically integrated v-flux component", units="m/s", coordinates="ocean_time")
-ds['ocean_time'].attrs = dict(long_name='relative time: days since 2000-01-01 00:00:00', units='days')
+# Save climatology file if requested
+if save_climatology:
+    print("Creating climatology dataset...")
+    ds_clim = boundary_tools.create_climatology_dataset(
+        temp_interp, salt_interp, u_interp, v_interp, w, ubar, vbar, zeta_interp,
+        time_days, grid, source_name=source_name
+    )
+    
+    print(f"Saving climatology to {output_climatology_file}...")
+    ds_clim.to_netcdf(output_climatology_file, mode='w')
+    print("Climatology file saved successfully!")
 
-ds['temp'] = ds['temp'].swap_dims({'ocean_time': 'temp_time'})
-ds['salt'] = ds['salt'].swap_dims({'ocean_time': 'salt_time'})
+# Save boundary forcing file if requested
+if save_boundary:
+    print("Extracting boundary transects...")
+    boundary_transects = boundary_tools.extract_boundary_transects(
+        temp_interp, salt_interp, u_interp, v_interp, ubar, vbar, zeta_interp,
+        grid, boundaries
+    )
+    
+    print("Creating boundary forcing dataset...")
+    ds_bry = boundary_tools.create_boundary_dataset(
+        boundary_transects, time_days, grid, 
+        start_time, end_time, source_name=source_name
+    )
+    
+    print(f"Saving boundary forcing to {output_boundary_file}...")
+    ds_bry.to_netcdf(output_boundary_file, mode='w')
+    print("Boundary forcing file saved successfully!")
 
-ds.to_netcdf(output_nc, format='NETCDF4', engine='netcdf4')
+print("\nBoundary conditions script completed successfully!")
 
-# Extract boundary transects from interpolated arrays based on flags and grid extents
-
-boundary_transects = {}
-
-if flag['west']:
-    # Western boundary: first xi index (xi=0), all eta
-    boundary_transects['west'] = {
-        'temp': temp_interp[:, :, :, 0],
-        'salt': salt_interp[:, :, :, 0],
-        'u': u_interp[:, :, :, 0],
-        'v': v_interp[:, :, :, 0],
-        'ubar': ubar[:, :, 0],
-        'vbar': vbar[:, :, 0],
-        'zeta': zeta_interp[:, :, 0],
-        'lon': roms_lon_2d[:, 0],
-        'lat': roms_lat_2d[:, 0]
-    }
-
-if flag['east']:
-    # Eastern boundary: last xi index (xi=-1), all eta
-    boundary_transects['east'] = {
-        'temp': temp_interp[:, :, :, -1],
-        'salt': salt_interp[:, :, :, -1],
-        'u': u_interp[:, :, :, -1],
-        'v': v_interp[:, :, :, -1],
-        'ubar': ubar[:, :, -1],
-        'vbar': vbar[:, :, -1],
-        'zeta': zeta_interp[:, :, -1],
-        'lon': roms_lon_2d[:, -1],
-        'lat': roms_lat_2d[:, -1]
-    }
-
-if flag['south']:
-    # Southern boundary: first eta index (eta=0), all xi
-    boundary_transects['south'] = {
-        'temp': temp_interp[:, :, 0, :],
-        'salt': salt_interp[:, :, 0, :],
-        'u': u_interp[:, :, 0, :],
-        'v': v_interp[:, :, 0, :],
-        'ubar': ubar[:, 0, :],
-        'vbar': vbar[:, 0, :],
-        'zeta': zeta_interp[:, 0, :],
-        'lon': roms_lon_2d[0, :],
-        'lat': roms_lat_2d[0, :]
-    }
-
-if flag['north']:
-    # Northern boundary: last eta index (eta=-1), all xi
-    boundary_transects['north'] = {
-        'temp': temp_interp[:, :, -1, :],
-        'salt': salt_interp[:, :, -1, :],
-        'u': u_interp[:, :, -1, :],
-        'v': v_interp[:, :, -1, :],
-        'ubar': ubar[:, -1, :],
-        'vbar': vbar[:, -1, :],
-        'zeta': zeta_interp[:, -1, :],
-        'lon': roms_lon_2d[-1, :],
-        'lat': roms_lat_2d[-1, :]
-    }
-
-print("Extracted boundary transects for:", list(boundary_transects.keys()))
-# === Write boundary condition file using xarray ===
-
-# Prepare time and output path
-bry_time = seconds_since_2000 / 86400.0  # days since 2000-01-01
-output_bry = os.path.join(base_path, 'output', f'boundary_forcing_{str(start_time)[:10]}.nc')
-
-# Get dimensions
-nt_bry = len(bry_time)
-s_rho_dim = s_rho
-xi_u_dim = xi_u
-xi_rho_dim = xi_rho
-eta_rho_dim = eta_rho
-eta_v_dim = eta_v
-
-# Helper to get boundary or fill with NaN if not present
-def get_bry(var, b, shape):
-    if b in boundary_transects:
-        return boundary_transects[b][var]
-    else:
-        return np.full(shape, np.nan)
-
-ds_bry = xr.Dataset(
-    {
-        # South boundary
-        'u_south': (['bry_time', 's_rho', 'xi_u'], get_bry('u', 'south', (nt_bry, s_rho_dim, xi_u_dim))),
-        'v_south': (['bry_time', 's_rho', 'xi_rho'], get_bry('v', 'south', (nt_bry, s_rho_dim, xi_rho_dim))),
-        'temp_south': (['bry_time', 's_rho', 'xi_rho'], get_bry('temp', 'south', (nt_bry, s_rho_dim, xi_rho_dim))),
-        'salt_south': (['bry_time', 's_rho', 'xi_rho'], get_bry('salt', 'south', (nt_bry, s_rho_dim, xi_rho_dim))),
-        'zeta_south': (['bry_time', 'xi_rho'], get_bry('zeta', 'south', (nt_bry, xi_rho_dim))),
-        'ubar_south': (['bry_time', 'xi_u'], get_bry('ubar', 'south', (nt_bry, xi_u_dim))),
-        'vbar_south': (['bry_time', 'xi_rho'], get_bry('vbar', 'south', (nt_bry, xi_rho_dim))),
-
-        # East boundary
-        'u_east': (['bry_time', 's_rho', 'eta_rho'], get_bry('u', 'east', (nt_bry, s_rho_dim, eta_rho_dim))),
-        'v_east': (['bry_time', 's_rho', 'eta_v'], get_bry('v', 'east', (nt_bry, s_rho_dim, eta_v_dim))),
-        'temp_east': (['bry_time', 's_rho', 'eta_rho'], get_bry('temp', 'east', (nt_bry, s_rho_dim, eta_rho_dim))),
-        'salt_east': (['bry_time', 's_rho', 'eta_rho'], get_bry('salt', 'east', (nt_bry, s_rho_dim, eta_rho_dim))),
-        'zeta_east': (['bry_time', 'eta_rho'], get_bry('zeta', 'east', (nt_bry, eta_rho_dim))),
-        'ubar_east': (['bry_time', 'eta_rho'], get_bry('ubar', 'east', (nt_bry, eta_rho_dim))),
-        'vbar_east': (['bry_time', 'eta_v'], get_bry('vbar', 'east', (nt_bry, eta_v_dim))),
-
-        # North boundary
-        'u_north': (['bry_time', 's_rho', 'xi_u'], get_bry('u', 'north', (nt_bry, s_rho_dim, xi_u_dim))),
-        'v_north': (['bry_time', 's_rho', 'xi_rho'], get_bry('v', 'north', (nt_bry, s_rho_dim, xi_rho_dim))),
-        'temp_north': (['bry_time', 's_rho', 'xi_rho'], get_bry('temp', 'north', (nt_bry, s_rho_dim, xi_rho_dim))),
-        'salt_north': (['bry_time', 's_rho', 'xi_rho'], get_bry('salt', 'north', (nt_bry, s_rho_dim, xi_rho_dim))),
-        'zeta_north': (['bry_time', 'xi_rho'], get_bry('zeta', 'north', (nt_bry, xi_rho_dim))),
-        'ubar_north': (['bry_time', 'xi_u'], get_bry('ubar', 'north', (nt_bry, xi_u_dim))),
-        'vbar_north': (['bry_time', 'xi_rho'], get_bry('vbar', 'north', (nt_bry, xi_rho_dim))),
-
-        # West boundary (not used in your example, but can be added similarly)
-        # 'u_west': ...
-        # 'v_west': ...
-        # 'temp_west': ...
-        # 'salt_west': ...
-        # 'zeta_west': ...
-        # 'ubar_west': ...
-        # 'vbar_west': ...
-
-    },
-    coords={
-        'bry_time': ('bry_time', bry_time),
-        's_rho': ('s_rho', np.arange(s_rho_dim)),
-        'xi_u': ('xi_u', np.arange(xi_u_dim)),
-        'xi_rho': ('xi_rho', np.arange(xi_rho_dim)),
-        'eta_rho': ('eta_rho', np.arange(eta_rho_dim)),
-        'eta_v': ('eta_v', np.arange(eta_v_dim)),
-    },
-    attrs={
-        'title': 'ROMS boundary forcing file created by model-tools',
-        'start_time': str(start_time),
-        'end_time': str(end_time),
-        'source': 'GLORYS',
-        'model_reference_date': '2000-01-01 00:00:00',
-        'theta_s': float(grid.theta_s),
-        'theta_b': float(grid.theta_b),
-        'hc': float(grid.hc),
-    }
-)
-
-
-# Set variable attributes (without _FillValue)
-ds_bry['u_south'].attrs = dict(long_name="southern boundary u-flux component", units="m/s", coordinates="bry_time")
-ds_bry['v_south'].attrs = dict(long_name="southern boundary v-flux component", units="m/s", coordinates="bry_time")
-ds_bry['temp_south'].attrs = dict(long_name="southern boundary potential temperature", units="degrees Celsius", coordinates="bry_time")
-ds_bry['salt_south'].attrs = dict(long_name="southern boundary salinity", units="PSU", coordinates="bry_time")
-ds_bry['u_east'].attrs = dict(long_name="eastern boundary u-flux component", units="m/s", coordinates="bry_time")
-ds_bry['v_east'].attrs = dict(long_name="eastern boundary v-flux component", units="m/s", coordinates="bry_time")
-ds_bry['temp_east'].attrs = dict(long_name="eastern boundary potential temperature", units="degrees Celsius", coordinates="bry_time")
-ds_bry['salt_east'].attrs = dict(long_name="eastern boundary salinity", units="PSU", coordinates="bry_time")
-ds_bry['u_north'].attrs = dict(long_name="northern boundary u-flux component", units="m/s", coordinates="bry_time")
-ds_bry['v_north'].attrs = dict(long_name="northern boundary v-flux component", units="m/s", coordinates="bry_time")
-ds_bry['temp_north'].attrs = dict(long_name="northern boundary potential temperature", units="degrees Celsius", coordinates="bry_time")
-ds_bry['salt_north'].attrs = dict(long_name="northern boundary salinity", units="PSU", coordinates="bry_time")
-ds_bry['zeta_north'].attrs = dict(long_name="northern boundary sea surface height", units="m", coordinates="bry_time")
-ds_bry['zeta_south'].attrs = dict(long_name="southern boundary sea surface height", units="m", coordinates="bry_time")
-ds_bry['zeta_east'].attrs = dict(long_name="eastern boundary sea surface height", units="m", coordinates="bry_time")
-ds_bry['bry_time'].attrs = dict(long_name='relative time: days since 2000-01-01 00:00:00', units='days')
-# ...add more variable attributes as needed...
-
-# Write to NetCDF
-ds_bry.to_netcdf(output_bry, unlimited_dims='bry_time', format='NETCDF4', encoding={var: {'_FillValue': np.nan} for var in ds_bry.data_vars})
-print(f"Boundary condition NetCDF file written: {output_bry}")
 

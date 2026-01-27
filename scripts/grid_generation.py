@@ -1,35 +1,71 @@
 import xarray as xr
 import numpy as np
-from netCDF4 import Dataset
 import cmocean
 import matplotlib.pyplot as plt
-from scipy.interpolate import griddata
-import hvplot.xarray
-import geoviews as gv
 import os 
+import sys
+
+# Add parent directory to path to import from code/
+try:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # When running as a script, go to parent directory then to code
+    code_dir = os.path.join(os.path.dirname(script_dir), 'code')
+except NameError:
+    # When running interactively, use base_path if available or manually specify
+    # This will be defined later in the script, so we'll add it after
+    code_dir = '/global/cfs/cdirs/m4304/enuss/model-tools/code'
+
+if code_dir not in sys.path:
+    sys.path.insert(0, code_dir)
+
 from grid import grid_tools
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from matplotlib.colors import ListedColormap, LinearSegmentedColormap
-from scipy.ndimage import gaussian_filter
 
-import funpy.model_utils as mod_utils 
 plt.ion()
+
+# ============================================================================
+# LOCATION-SPECIFIC PARAMETERS - Customize these for your domain
+# ============================================================================
 
 base_path = '/global/cfs/cdirs/m4304/enuss/model-tools'
 bathy_nc = 'east_coast_bathy_final.nc' 
-output_nc = 'roms_grid.nc'  # Output ROMS grid file
-dx = 0.05  # grid resolution in degrees longitude
-dy = 0.05  # grid resolution in degrees latitude
-N = 100     # number of vertical levels
+output_dir = "/global/cfs/cdirs/m4304/enuss/model-tools/output"
+output_nc = os.path.join(output_dir, 'roms_grid_1km_smoothed.nc')  # Output ROMS grid file
+
+# Grid resolution
+dx = 0.01  # grid resolution in degrees longitude
+dy = 0.01  # grid resolution in degrees latitude
+
+# Domain extent
 lon_range = (-80, -60)  # longitude range for the grid
-lat_range = (32, 46)    # latitude range for the grid
+lat_range = (33, 46)    # latitude range for the grid
+
+# Vertical parameters
+N = 50         # number of vertical levels
+theta_s = 5    # surface stretching parameter
+theta_b = 0.5  # bottom stretching parameter
+hc = -500      # critical depth (negative)
+
+# Bathymetry smoothing parameters
+initial_smooth_sigma = 10  # Initial Gaussian smoothing strength
+hmin = -5                  # Minimum depth threshold (negative)
+
+# Iterative smoothing parameters
+rx0_thresh = 0.2     # rx0 threshold for iterative smoothing
+max_iter = 10        # Maximum iterations
+smooth_sigma = 6     # Smoothing strength for iterative method
+buffer_size = 5      # Buffer around steep regions
+
+# ============================================================================
+# GRID GENERATION - Uses grid_tools class for reusable operations
+# ============================================================================
 
 # Load bathymetry data
 ds = xr.open_dataset(bathy_nc)
 bathy = ds.z.values
-lon = ds.lon.values 
+lon = ds.lon.values
 lat = ds.lat.values
 
 # Define new grid
@@ -42,66 +78,25 @@ lon_rho = np.linspace(lon_min, lon_max, nx)
 lat_rho = np.linspace(lat_min, lat_max, ny)
 lon_rho_grid, lat_rho_grid = np.meshgrid(lon_rho, lat_rho)
 
-## create u and v grids 
-# u-grid: points are halfway between rho points in the x-direction (longitude)
-lon_u = 0.5 * (lon_rho_grid[:, :-1] + lon_rho_grid[:, 1:])
-lat_u = 0.5 * (lat_rho_grid[:, :-1] + lat_rho_grid[:, 1:])
+# Create staggered grids (u, v, psi)
+staggered_grids = grid_tools.create_staggered_grids(lon_rho_grid, lat_rho_grid)
 
-# v-grid: points are halfway between rho points in the y-direction (latitude)
-lon_v = 0.5 * (lon_rho_grid[:-1, :] + lon_rho_grid[1:, :])
-lat_v = 0.5 * (lat_rho_grid[:-1, :] + lat_rho_grid[1:, :])
+# Compute grid metrics (pm, pn, f, xl, el)
+metrics = grid_tools.compute_grid_metrics(lon_rho_grid, lat_rho_grid)
 
-# psi grid 
-lon_psi = 0.25 * (lon_rho_grid[:-1, :-1] + lon_rho_grid[1:, :-1] + 
-                  lon_rho_grid[:-1, 1:] + lon_rho_grid[1:, 1:])
-lat_psi = 0.25 * (lat_rho_grid[:-1, :-1] + lat_rho_grid[1:, :-1] + 
-                  lat_rho_grid[:-1, 1:] + lat_rho_grid[1:, 1:])
-
-# compute grid metrics 
-# Earth's radius in meters
-R = 6371000
-
-# Convert degrees to radians for calculations
-lat_rho_rad = np.deg2rad(lat_rho_grid)
-lon_rho_rad = np.deg2rad(lon_rho_grid)
-
-# Compute dx (meters) - distance between adjacent points in x (longitude) direction
-dx_m = np.zeros_like(lon_rho_grid)
-dx_m[:, :-1] = R * np.cos(lat_rho_rad[:, :-1]) * (lon_rho_rad[:, 1:] - lon_rho_rad[:, :-1])
-dx_m[:, -1] = dx_m[:, -2]  # pad last column
-pm = 1/dx_m
-
-# Compute dy (meters) - distance between adjacent points in y (latitude) direction
-dy_m = np.zeros_like(lat_rho_grid)
-dy_m[:-1, :] = R * (lat_rho_rad[1:, :] - lat_rho_rad[:-1, :])
-dy_m[-1, :] = dy_m[-2, :]  # pad last row
-pn = 1/dy_m
-
-# compute xl and el 
-xl = np.sum(dx_m[0, :])
-el = np.sum(dy_m[:, 0])
-
-# compute f 
-f = 2 * 7.2921159e-5 * np.sin(lat_rho_rad)  
-
-# Smooth the log of the bathymetry
-bathy_masked = np.ma.masked_where(bathy > 0, bathy)
-bathy_smooth = mod_utils.spatially_avg(np.log(np.abs(bathy_masked)), lon, lat, order=1, filtx=dx*5, filty=dy*5)
-bathy_smooth = -np.exp(bathy_smooth)  # Convert back to depth
-bathy_smooth = np.where(bathy_masked.mask, bathy, bathy_smooth)
-
-# Interpolate bathymetry to new grid 
-lon_grid, lat_grid = np.meshgrid(lon, lat)
-values = bathy_smooth.flatten()
-h = griddata(
-    (lon_grid.flatten(), lat_grid.flatten()), values,
-    (lon_rho_grid.flatten(), lat_rho_grid.flatten()), method='linear'
+# Interpolate and smooth bathymetry
+h = grid_tools.interpolate_bathymetry(
+    bathy, lon, lat, lon_rho_grid, lat_rho_grid, 
+    smooth_sigma=initial_smooth_sigma, use_log_smoothing=True
 )
-h = h.reshape(ny, nx)
 
-# Create mask (1 for ocean, 0 for land)
-hmin = -5
-mask_rho = np.where(h < -hmin, 1, 0)
+# Create initial masks
+masks = grid_tools.create_masks(h, hmin)
+mask_rho = masks['mask_rho']
+
+# ============================================================================
+# LOCATION-SPECIFIC MASK MODIFICATIONS
+# ============================================================================
 
 # Add masking of lake in the grid 
 mask_rho[-60:,:150] = 0 
@@ -111,233 +106,74 @@ lat_ind = np.where(lat_rho>45.6)[0]
 lon_ind = np.where((lon_rho>-64.4) & (lon_rho<-61.2))[0]
 mask_rho[lat_ind[0]:,lon_ind[0]:lon_ind[-1]] = 0
 
-# Create mask for u and v grids
-mask_u = np.minimum(mask_rho[:, :-1], mask_rho[:, 1:])
-mask_v = np.minimum(mask_rho[:-1, :], mask_rho[1:, :])
+# Recreate all masks with modified mask_rho
+masks = grid_tools.create_masks(h, hmin, mask_rho=mask_rho)
 
-# Psi points are at cell corners - a psi point is wet only if 
-# all 4 surrounding rho points are wet
-mask_psi = (mask_rho[:-1, :-1] *    # SW rho point
-            mask_rho[1:, :-1] *     # NW rho point  
-            mask_rho[:-1, 1:] *     # SE rho point
-            mask_rho[1:, 1:])       # NE rho point
+# ============================================================================
+# BATHYMETRY SMOOTHING
+# ============================================================================
 
-# fill h values where h is shallower than hmin (aka mask is 0) with 0 m depth 
+# Fill h values where h is shallower than hmin with hmin 
 h[h > hmin] = hmin
-# check that all nans are replaced with 0
 h = np.nan_to_num(h, nan=hmin)
 
+# Check initial rx0
+rx0_x, rx0_y = grid_tools.compute_rx0(np.abs(h)) 
+rx0_x = np.pad(rx0_x, ((0, 0), (0, 1)), mode='edge')
+rx0_y = np.pad(rx0_y, ((0, 1), (0, 0)), mode='edge')
+print(f"Initial max(rx0) = {max(np.max(rx0_x), np.max(rx0_y)):.4f}")
 
-rx0_x, rx0_y = grid_tools.compute_rx0(h)
-rx0 = np.maximum(np.nanmax(np.abs(rx0_x)), np.nanmax(np.abs(rx0_y)))
-print(f"Max rx0: {rx0:.3f}")
-rx1_x, rx1_y = grid_tools.compute_rx1(h)
-rx1 = np.maximum(np.nanmax(np.abs(rx1_x)), np.nanmax(np.abs(rx1_y)))
-print(f"Max rx1: {rx1:.3f}")
+# Iterative localized smoothing for steep regions
+h = grid_tools.iterative_smoothing(h, rx0_thresh, max_iter, smooth_sigma, buffer_size)
 
-grad_y, grad_x, grad, r = grid_tools.compute_slope_factor(h, dx=dx_m, dy=dy_m)
-sp = grid_tools.compute_slope_parameter(-h)
-
-r = np.nan_to_num(r, nan=0.0)
-r_big_indy, r_big_indx = np.where(r>0.2)
+# ============================================================================
+# VERTICAL COORDINATES
+# ============================================================================
 
 # Vertical levels (sigma coordinates) 
 sigma_w = grid_tools.compute_sigma(N, type='w')
 sigma_r = grid_tools.compute_sigma(N, type='r')
 
-theta_s = 5 
-theta_b = 0.5 
-
 Cs_w = grid_tools.compute_cs(sigma_w, theta_s, theta_b)
 Cs_r = grid_tools.compute_cs(sigma_r, theta_s, theta_b)
 
-hc = -500 
-
-h_mask = np.where(mask_rho == 1, h, np.nan)
+# Compute vertical levels for visualization
+h_mask = np.where(masks['mask_rho'] == 1, h, np.nan)
 z_rho = grid_tools.compute_z(sigma_r, hc, Cs_r, h_mask, np.zeros((ny, nx, 1)))  
 z_rho = np.squeeze(z_rho)  # shape: (nz, ny, nx)
 
-# Create ROMS grid xarray Dataset and save to NetCDF
-# Create the dataset
-ds_out = xr.Dataset(
-    {
-        "lat_rho": (("eta_rho", "xi_rho"), lat_rho_grid, {
-            "_FillValue": np.nan,
-            "long_name": "latitude of rho-points",
-            "units": "degrees North"
-        }),
-        "lon_rho": (("eta_rho", "xi_rho"), lon_rho_grid, {
-            "_FillValue": np.nan,
-            "long_name": "longitude of rho-points",
-            "units": "degrees East"
-        }),
-        "lat_u": (("eta_rho", "xi_u"), lat_u, {
-            "_FillValue": np.nan,
-            "long_name": "latitude of u-points",
-            "units": "degrees North"
-        }),
-        "lon_u": (("eta_rho", "xi_u"), lon_u, {
-            "_FillValue": np.nan,
-            "long_name": "longitude of u-points",
-            "units": "degrees East"
-        }),
-        "lat_v": (("eta_v", "xi_rho"), lat_v, {
-            "_FillValue": np.nan,
-            "long_name": "latitude of v-points",
-            "units": "degrees North"
-        }),
-        "lon_v": (("eta_v", "xi_rho"), lon_v, {
-            "_FillValue": np.nan,
-            "long_name": "longitude of v-points",
-            "units": "degrees East"
-        }),
-        "y_rho": (("eta_rho", "xi_rho"), lat_rho_grid, {
-            "_FillValue": np.nan,
-            "long_name": "latitude of rho-points",
-            "units": "degrees North"
-        }),
-        "lat_psi": (("eta_psi", "xi_psi"), lat_psi, {
-            "_FillValue": np.nan,
-            "long_name": "latitude of psi-points",
-            "units": "degrees North"
-        }),
-        "lon_psi": (("eta_psi", "xi_psi"), lon_psi, {
-            "_FillValue": np.nan,
-            "long_name": "longitude of psi-points",
-            "units": "degrees East"
-        }),        
-        "x_rho": (("eta_rho", "xi_rho"), lon_rho_grid, {
-            "_FillValue": np.nan,
-            "long_name": "longitude of rho-points",
-            "units": "degrees East"
-        }),        
-        "y_u": (("eta_rho", "xi_u"), lat_u, {
-            "_FillValue": np.nan,
-            "long_name": "latitude of u-points",
-            "units": "degrees North"
-        }),
-        "x_u": (("eta_rho", "xi_u"), lon_u, {
-            "_FillValue": np.nan,
-            "long_name": "longitude of u-points",
-            "units": "degrees East"
-        }),
-        "y_v": (("eta_v", "xi_rho"), lat_v, {
-            "_FillValue": np.nan,
-            "long_name": "latitude of v-points",
-            "units": "degrees North"
-        }),
-        "x_v": (("eta_v", "xi_rho"), lon_v, {
-            "_FillValue": np.nan,
-            "long_name": "longitude of v-points",
-            "units": "degrees East"
-        }),  
-        "y_psi": (("eta_psi", "xi_psi"), lat_psi, {
-            "_FillValue": np.nan,
-            "long_name": "latitude of psi-points",
-            "units": "degrees North"
-        }),
-        "x_psi": (("eta_psi", "xi_psi"), lon_psi, {
-            "_FillValue": np.nan,
-            "long_name": "longitude of psi-points",
-            "units": "degrees East"
-        }),                      
-        "angle": (("eta_rho", "xi_rho"), np.zeros_like(lat_rho_grid), {
-            "_FillValue": np.nan,
-            "long_name": "Angle between xi axis and east",
-            "units": "radians",
-            "coordinates": "lat_rho lon_rho"
-        }),
-        "f": (("eta_rho", "xi_rho"), f, {
-            "_FillValue": np.nan,
-            "long_name": "Coriolis parameter at rho-points",
-            "units": "second-1",
-            "coordinates": "lat_rho lon_rho"
-        }),
-        "pm": (("eta_rho", "xi_rho"), pm, {
-            "_FillValue": np.nan,
-            "long_name": "Curvilinear coordinate metric in xi-direction",
-            "units": "meter-1",
-            "coordinates": "lat_rho lon_rho"
-        }),
-        "pn": (("eta_rho", "xi_rho"), pn, {
-            "_FillValue": np.nan,
-            "long_name": "Curvilinear coordinate metric in eta-direction",
-            "units": "meter-1",
-            "coordinates": "lat_rho lon_rho"
-        }),
-        "spherical": ((), "T", {
-            "Long_name": "Grid type logical switch",
-            "option_T": "spherical"
-        }),
-        "mask_rho": (("eta_rho", "xi_rho"), mask_rho, {
-            "long_name": "Mask at rho-points",
-            "units": "land/water (0/1)",
-            "coordinates": "lat_rho lon_rho"
-        }),
-        "mask_u": (("eta_rho", "xi_u"), mask_u, {
-            "long_name": "Mask at u-points",
-            "units": "land/water (0/1)",
-            "coordinates": "lat_u lon_u"
-        }),
-        "mask_v": (("eta_v", "xi_rho"), mask_v, {
-            "long_name": "Mask at v-points",
-            "units": "land/water (0/1)",
-            "coordinates": "lat_v lon_v"
-        }),
-        "mask_psi": (("eta_psi", "xi_psi"), mask_psi, {
-            "long_name": "Mask at psi-points",
-            "units": "land/water (0/1)",
-            "coordinates": "lat_psi lon_psi"
-        }),        
-        "h": (("eta_rho", "xi_rho"), -h, {
-            "_FillValue": np.nan,
-            "long_name": "Bathymetry at rho-points",
-            "units": "meter",
-            "coordinates": "lat_rho lon_rho"
-        }),
-        "sigma_r": (("s_rho",), sigma_r, {
-            "_FillValue": np.nan,
-            "long_name": "Fractional vertical stretching coordinate at rho-points",
-            "units": "nondimensional"
-        }),
-        "Cs_r": (("s_rho",), Cs_r, {
-            "_FillValue": np.nan,
-            "long_name": "Vertical stretching function at rho-points",
-            "units": "nondimensional"
-        }),
-        "sigma_w": (("s_w",), sigma_w, {
-            "_FillValue": np.nan,
-            "long_name": "Fractional vertical stretching coordinate at w-points",
-            "units": "nondimensional"
-        }),
-        "Cs_w": (("s_w",), Cs_w, {
-            "_FillValue": np.nan,
-            "long_name": "Vertical stretching function at w-points",
-            "units": "nondimensional"
-        }),
-        "xl": ((), xl, {
-            "long_name": "domain length in the XI-direction",
-            "units": "meter"
-        }),
-        "el": ((), el, {
-            "long_name": "domain length in the ETA-direction",
-            "units": "meter"
-        }),
-    },
-    coords={
-        "eta_rho": np.arange(ny),
-        "xi_rho": np.arange(nx),
-        "xi_u": np.arange(nx - 1),
-        "eta_v": np.arange(ny - 1),
-        "eta_psi": np.arange(ny-1),
-        "xi_psi": np.arange(nx -1),
-        "s_rho": np.arange(N),
-        "s_w": np.arange(N + 1)
-    }
-)
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
 
-# Assign global attributes
-ds_out.attrs = {
+
+plt.figure(figsize=(10, 8))
+ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=(lon_min + lon_max) / 2,
+                                               central_latitude=(lat_min + lat_max) / 2))
+pc = ax.pcolormesh(lon_rho_grid, lat_rho_grid, -h, cmap=cmocean.cm.deep, shading='auto', transform=ccrs.PlateCarree())
+ax.coastlines(resolution='10m', color='k')
+ax.add_feature(cfeature.LAND, zorder=100, edgecolor='k', facecolor='0.8')
+ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
+plt.colorbar(pc, ax=ax, orientation='vertical', label='Depth (m)')
+plt.title('Bathymetry (h) on ROMS Grid')
+plt.tight_layout()
+plt.savefig(os.path.join(base_path, 'plots', 'roms_grid_bathymetry.png'), dpi=300)
+
+# ============================================================================
+# CREATE AND SAVE ROMS GRID DATASET
+# ============================================================================
+
+# Prepare sigma parameters dictionary
+sigma_params = {
+    'sigma_r': sigma_r,
+    'sigma_w': sigma_w,
+    'Cs_r': Cs_r,
+    'Cs_w': Cs_w,
+    'N': N
+}
+
+# Prepare global attributes
+global_attrs = {
     "title": "ROMS grid created by model-tools",
     "size_x": nx,
     "size_y": ny,
@@ -351,48 +187,14 @@ ds_out.attrs = {
     "hc": -hc  
 }
 
+# Create ROMS grid dataset
+ds_out = grid_tools.create_roms_grid_dataset(
+    lon_rho_grid, lat_rho_grid, -h,  # Note: h is converted to positive for ROMS
+    masks, staggered_grids, metrics, sigma_params, global_attrs
+)
+
 # Save to NetCDF file
-ds_out.to_netcdf(os.path.join(base_path, 'output', output_nc))
+output_path = os.path.join(base_path, 'output', output_nc)
+ds_out.to_netcdf(output_path)
+print(f"Grid saved to {output_path}")
 
-
-fig, ax = plt.subplots(figsize=(10, 6))
-c = ax.pcolormesh(lon_rho_grid[1:,1:], lat_rho_grid[1:,1:], sp, cmap=cmocean.cm.deep, shading='auto')
-ax.set_xlabel('Longitude')
-ax.set_ylabel('Latitude')
-cb = fig.colorbar(c, ax=ax, label='Slope Parameter')
-ax.set_aspect('auto')
-c.set_clim(0,0.2)
-
-plot_dir = os.path.join(base_path, 'plots')
-os.makedirs(plot_dir, exist_ok=True)
-plot_path = os.path.join(plot_dir, 'roms_grid_slope_parameter.png')
-plt.savefig(plot_path, dpi=200, bbox_inches='tight')
-plt.close(fig)
-
-fig, ax = plt.subplots(figsize=(10, 6))
-c = ax.pcolormesh(lon_rho_grid, lat_rho_grid, -h, cmap=cmocean.cm.deep, shading='auto')
-yind, xind = np.where(sp > 0.2)
-ax.scatter(lon_rho_grid[yind, xind], lat_rho_grid[yind, xind], color='red', s=1, label='Slope > 0.2')
-ax.set_xlabel('Longitude')
-ax.set_ylabel('Latitude')
-cb = fig.colorbar(c, ax=ax, label='Depth')
-ax.set_aspect('auto')
-
-plot_dir = os.path.join(base_path, 'plots')
-os.makedirs(plot_dir, exist_ok=True)
-plot_path = os.path.join(plot_dir, 'roms_grid_bathy.png')
-plt.savefig(plot_path, dpi=200, bbox_inches='tight')
-plt.close(fig)
-
-fig, ax = plt.subplots(figsize=(10, 6))
-c = ax.pcolormesh(lon_rho_grid, lat_rho_grid, mask_rho, cmap=cmocean.cm.deep, shading='auto')
-ax.set_xlabel('Longitude')
-ax.set_ylabel('Latitude')
-cb = fig.colorbar(c, ax=ax)
-ax.set_aspect('auto')
-
-plot_dir = os.path.join(base_path, 'plots')
-os.makedirs(plot_dir, exist_ok=True)
-plot_path = os.path.join(plot_dir, 'roms_grid_mask.png')
-plt.savefig(plot_path, dpi=200, bbox_inches='tight')
-plt.close(fig)

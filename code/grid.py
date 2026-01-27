@@ -281,7 +281,11 @@ class grid_tools:
             
             steep_mask = (rx0_x > rx0_thresh) | (rx0_y > rx0_thresh)
             steep_mask_buffered = binary_dilation(steep_mask, iterations=buffer_size)
-            h_gauss = gaussian_filter(h_iter, sigma=sigma)
+            
+            # Smooth the log of the bathymetry for better handling of steep gradients
+            h_log = np.log(np.abs(h_iter))
+            h_log_gauss = gaussian_filter(h_log, sigma=sigma)
+            h_gauss = -np.exp(h_log_gauss)  # Convert back to negative depths
             
             # Create a smooth blending mask using a Gaussian filter on the binary mask
             blend_mask = gaussian_filter(steep_mask_buffered.astype(float), sigma=2)

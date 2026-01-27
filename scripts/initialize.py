@@ -14,8 +14,8 @@ import cartopy.feature as cfeature
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 
 # Set paths to data files and grid file 
-base_path = '/global/cfs/cdirs/m4304/enuss/model-tools'
-grid_nc = 'roms_grid.nc' 
+base_path = '/global/cfs/cdirs/m4304/enuss/model-tools/'
+grid_nc = 'roms_grid_1km_smoothed.nc' 
 forcing_datapath = '/global/cfs/cdirs/m4304/enuss/US_East_Coast/Forcing_Data'
 
 # Load the grid 
@@ -23,6 +23,39 @@ grid = xr.open_dataset(os.path.join(base_path, 'output', grid_nc))
 
 # Load initialization data 
 init_data = xr.open_dataset(os.path.join(forcing_datapath, 'GLORYS_data', 'GLORYS_January.nc'))
+
+# Define the new depth value and fill values for each variable
+new_depth = 10000.0
+fill_values = {
+    'zos': np.nan,      # sea surface height
+    'uo': 0.0,       # eastward velocity  
+    'vo': 0.0,       # northward velocity
+    'so': 35.0,      # salinity (typical deep ocean value)
+    'thetao': 1.0    # potential temperature (typical deep ocean value)
+}
+
+# Create new dataset with the additional depth layer
+new_data_vars = {}
+for var_name, fill_val in fill_values.items():
+    # Create array with same shape as original but with depth dimension = 1
+    shape = (len(init_data.time), 1, len(init_data.latitude), len(init_data.longitude))
+    data = np.full(shape, fill_val, dtype=np.float32)
+    
+    new_data_vars[var_name] = xr.DataArray(
+        data,
+        coords={
+            'time': init_data.time,
+            'depth': [new_depth],
+            'latitude': init_data.latitude,
+            'longitude': init_data.longitude
+        },
+        dims=['time', 'depth', 'latitude', 'longitude']
+    )
+
+# Create new dataset and concatenate with original
+new_layer = xr.Dataset(new_data_vars, attrs=init_data.attrs)
+init_data = xr.concat([init_data, new_layer], dim='depth')
+ 
 
 # Set variables names used in initialization data 
 salt_var = 'so'
@@ -194,7 +227,7 @@ zeta_interp = interp_tools.interp2d(
 fill_value = 0 
 zeta_interp = np.where(np.isnan(zeta_interp), fill_value, zeta_interp)
 
-output_nc = os.path.join(base_path, 'output', 'initial_conditions.nc')
+output_nc = os.path.join(base_path, 'output', 'initial_conditions_1km.nc')
 ds = xr.Dataset(
     {
         'temp': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), temp_interp[np.newaxis, :, :, :]),

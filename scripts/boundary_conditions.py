@@ -15,7 +15,7 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 import pandas as pd
  
 base_path = '/global/cfs/cdirs/m4304/enuss/model-tools'
-grid_nc = 'roms_grid.nc' 
+grid_nc = 'roms_grid_1km_smoothed.nc' 
 forcing_datapath = '/global/cfs/cdirs/m4304/enuss/US_East_Coast/Forcing_Data'
 
 grid = xr.open_dataset(os.path.join(base_path, 'output', grid_nc))
@@ -103,19 +103,15 @@ roms_latv_2d = grid.lat_v.values
 roms_lonv_2d = grid.lon_v.values  
 
 nt = len(valid_time_indices)
-temp_interp = np.empty((nt, s_rho, eta_rho, xi_rho))
-salt_interp = np.empty((nt, s_rho, eta_rho, xi_rho))
-u_interp = np.empty((nt, s_rho, eta_rho, xi_u))
-v_interp = np.empty((nt, s_rho, eta_v, xi_rho))
-zeta_interp = np.empty((nt, eta_rho, xi_rho))
+temp_interp = np.empty((nt, s_rho, eta_rho, xi_rho), dtype='float32')
+salt_interp = np.empty((nt, s_rho, eta_rho, xi_rho), dtype='float32')
+u_interp = np.empty((nt, s_rho, eta_rho, xi_u), dtype='float32')
+v_interp = np.empty((nt, s_rho, eta_v, xi_rho), dtype='float32')
+zeta_interp = np.empty((nt, eta_rho, xi_rho), dtype='float32')
 seconds_since_2000 = np.empty(nt)
 
 for t in range(nt):
     temp_data = bc_data['thetao'][valid_time_indices[t],:,:].values
-    salt_data = bc_data['so'][valid_time_indices[t],:,:].values
-    u_data = bc_data['uo'][valid_time_indices[t],:,:].values
-    v_data = bc_data['vo'][valid_time_indices[t],:,:].values
-    zeta_data = bc_data['zos'][valid_time_indices[t],0,:,:].values
     time = bc_data['time'][valid_time_indices[t]].values
     current_time = pd.to_datetime(str(time))
     seconds_since_2000[t] = (current_time - ref_time).total_seconds()
@@ -123,22 +119,31 @@ for t in range(nt):
     temp_interp[t] = interp_tools.interp3d(
         temp_data, glorys_lon_2d, glorys_lat_2d, glorys_depth, roms_lon_2d, roms_lat_2d, -z_rho, method='linear'
     )
+    del temp_data
 
+    salt_data = bc_data['so'][valid_time_indices[t],:,:].values
     salt_interp[t] = interp_tools.interp3d(
         salt_data, glorys_lon_2d, glorys_lat_2d, glorys_depth, roms_lon_2d, roms_lat_2d, -z_rho, method='linear'
     )
+    del salt_data
 
+    u_data = bc_data['uo'][valid_time_indices[t],:,:].values
     u_interp[t] = interp_tools.interp3d(
         u_data, glorys_lon_2d, glorys_lat_2d, glorys_depth, roms_lonu_2d, roms_latu_2d, -z_rho, method='linear'
     )
+    del u_data
 
+    v_data = bc_data['vo'][valid_time_indices[t],:,:].values
     v_interp[t] = interp_tools.interp3d(
         v_data, glorys_lon_2d, glorys_lat_2d, glorys_depth, roms_lonv_2d, roms_latv_2d, -z_rho, method='linear'
     )   
+    del v_data
 
+    zeta_data = bc_data['zos'][valid_time_indices[t],0,:,:].values
     zeta_interp[t] = interp_tools.interp2d(
         zeta_data, glorys_lon_2d, glorys_lat_2d, roms_lon_2d, roms_lat_2d, method='linear'
     )
+    del zeta_data
     print("Interpolated time step %d/%d" % (t + 1, nt))
 
 # fill nans with values 
@@ -206,6 +211,11 @@ ds['Cs_w'].attrs = dict(long_name="Vertical stretching function at w-points", un
 ds['zeta'].attrs = dict(long_name="sea surface height", units="m", coordinates="ocean_time")
 ds['ubar'].attrs = dict(long_name="vertically integrated u-flux component", units="m/s", coordinates="ocean_time")
 ds['vbar'].attrs = dict(long_name="vertically integrated v-flux component", units="m/s", coordinates="ocean_time")
+ds['ocean_time'].attrs = dict(long_name='relative time: days since 2000-01-01 00:00:00', units='days')
+
+ds['temp'] = ds['temp'].swap_dims({'ocean_time': 'temp_time'})
+ds['salt'] = ds['salt'].swap_dims({'ocean_time': 'salt_time'})
+
 ds.to_netcdf(output_nc, format='NETCDF4', engine='netcdf4')
 
 # Extract boundary transects from interpolated arrays based on flags and grid extents
@@ -370,6 +380,6 @@ ds_bry['bry_time'].attrs = dict(long_name='relative time: days since 2000-01-01 
 # ...add more variable attributes as needed...
 
 # Write to NetCDF
-ds_bry.to_netcdf(output_bry, format='NETCDF4', encoding={var: {'_FillValue': np.nan} for var in ds_bry.data_vars})
+ds_bry.to_netcdf(output_bry, unlimited_dims='bry_time', format='NETCDF4', encoding={var: {'_FillValue': np.nan} for var in ds_bry.data_vars})
 print(f"Boundary condition NetCDF file written: {output_bry}")
 

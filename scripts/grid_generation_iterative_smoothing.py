@@ -13,23 +13,24 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from scipy.ndimage import gaussian_filter
+from scipy.ndimage import binary_dilation
 
 import funpy.model_utils as mod_utils 
 plt.ion()
 
 base_path = '/global/cfs/cdirs/m4304/enuss/model-tools'
 bathy_nc = 'east_coast_bathy_final.nc' 
-output_nc = 'roms_grid.nc'  # Output ROMS grid file
-dx = 0.05  # grid resolution in degrees longitude
-dy = 0.05  # grid resolution in degrees latitude
-N = 100     # number of vertical levels
+output_nc = 'roms_grid_1km_smoothed.nc'  # Output ROMS grid file
+dx = 0.01  # grid resolution in degrees longitude
+dy = 0.01  # grid resolution in degrees latitude
+N = 50     # number of vertical levels
 lon_range = (-80, -60)  # longitude range for the grid
-lat_range = (32, 46)    # latitude range for the grid
+lat_range = (33, 46)    # latitude range for the grid
 
 # Load bathymetry data
 ds = xr.open_dataset(bathy_nc)
 bathy = ds.z.values
-lon = ds.lon.values 
+lon = ds.lon.values
 lat = ds.lat.values
 
 # Define new grid
@@ -86,9 +87,15 @@ f = 2 * 7.2921159e-5 * np.sin(lat_rho_rad)
 
 # Smooth the log of the bathymetry
 bathy_masked = np.ma.masked_where(bathy > 0, bathy)
-bathy_smooth = mod_utils.spatially_avg(np.log(np.abs(bathy_masked)), lon, lat, order=1, filtx=dx*5, filty=dy*5)
+sigma = 10  # smoothing strength, adjust as needed
+
+# Smooth the entire grid, then blend only steep regions
+bathy_smooth = gaussian_filter(np.log(np.abs(bathy_masked)), sigma=sigma)
 bathy_smooth = -np.exp(bathy_smooth)  # Convert back to depth
 bathy_smooth = np.where(bathy_masked.mask, bathy, bathy_smooth)
+#bathy_smooth = mod_utils.spatially_avg(np.log(np.abs(bathy_masked)), lon, lat, order=1, filtx=dx*10, filty=dy*10)
+#bathy_smooth = -np.exp(bathy_smooth)  # Convert back to depth
+#bathy_smooth = np.where(bathy_masked.mask, bathy, bathy_smooth)
 
 # Interpolate bathymetry to new grid 
 lon_grid, lat_grid = np.meshgrid(lon, lat)
@@ -127,19 +134,43 @@ h[h > hmin] = hmin
 # check that all nans are replaced with 0
 h = np.nan_to_num(h, nan=hmin)
 
+rx0_x, rx0_y = grid_tools.compute_rx0(np.abs(h)) 
+# Pad rx0_x with an extra row in the y-direction
+rx0_x = np.pad(rx0_x, ((0, 0), (0, 1)), mode='edge')
+# Pad rx0_y with an extra column in the x-direction
+rx0_y = np.pad(rx0_y, ((0, 1), (0, 0)), mode='edge')
 
-rx0_x, rx0_y = grid_tools.compute_rx0(h)
-rx0 = np.maximum(np.nanmax(np.abs(rx0_x)), np.nanmax(np.abs(rx0_y)))
-print(f"Max rx0: {rx0:.3f}")
-rx1_x, rx1_y = grid_tools.compute_rx1(h)
-rx1 = np.maximum(np.nanmax(np.abs(rx1_x)), np.nanmax(np.abs(rx1_y)))
-print(f"Max rx1: {rx1:.3f}")
+print(max(np.max(rx0_x), np.max(rx0_y)))
 
-grad_y, grad_x, grad, r = grid_tools.compute_slope_factor(h, dx=dx_m, dy=dy_m)
-sp = grid_tools.compute_slope_parameter(-h)
+# Iterative localized smoothing for steep regions
+buffer_size = 5  # number of grid cells for buffer (adjust as needed)
+sigma = 6  # smoothing strength, adjust as needed
+max_iter = 10
+rx0_thresh = 0.2
 
-r = np.nan_to_num(r, nan=0.0)
-r_big_indy, r_big_indx = np.where(r>0.2)
+h_iter = h.copy()
+for i in range(max_iter):
+    rx0_x, rx0_y = grid_tools.compute_rx0(np.abs(h_iter))
+    # Pad rx0_x with an extra row in the y-direction
+    rx0_x = np.pad(rx0_x, ((0, 0), (0, 1)), mode='edge')
+    # Pad rx0_y with an extra column in the x-direction
+    rx0_y = np.pad(rx0_y, ((0, 1), (0, 0)), mode='edge')
+    max_rx0 = max(np.max(rx0_x), np.max(rx0_y))
+    print(f"Iteration {i+1}: max(rx0) = {max_rx0:.4f}")
+    if max_rx0 < rx0_thresh:
+        print(f"Smoothing converged: max(rx0) < {rx0_thresh} after {i+1} iterations.")
+        break
+    steep_mask = (rx0_x > rx0_thresh) | (rx0_y > rx0_thresh)
+    steep_mask_buffered = binary_dilation(steep_mask, iterations=buffer_size)
+    h_gauss = gaussian_filter(h_iter, sigma=sigma)
+    # Create a smooth blending mask using a Gaussian filter on the binary mask
+    blend_mask = gaussian_filter(steep_mask_buffered.astype(float), sigma=2)
+    blend_mask = np.clip(blend_mask, 0, 1)  # Ensure values are in [0, 1]
+    # Blend the original and smoothed bathymetry
+    h_iter = h_iter * (1 - blend_mask) + h_gauss * blend_mask
+    print(f"Iteration {i+1}: {np.sum(steep_mask_buffered)} grid points blended.")
+h = h_iter 
+
 
 # Vertical levels (sigma coordinates) 
 sigma_w = grid_tools.compute_sigma(N, type='w')
@@ -156,6 +187,18 @@ hc = -500
 h_mask = np.where(mask_rho == 1, h, np.nan)
 z_rho = grid_tools.compute_z(sigma_r, hc, Cs_r, h_mask, np.zeros((ny, nx, 1)))  
 z_rho = np.squeeze(z_rho)  # shape: (nz, ny, nx)
+
+plt.figure(figsize=(10, 8))
+ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=(lon_min + lon_max) / 2,
+                                               central_latitude=(lat_min + lat_max) / 2))
+pc = ax.pcolormesh(lon_rho_grid, lat_rho_grid, -h, cmap=cmocean.cm.deep, shading='auto', transform=ccrs.PlateCarree())
+ax.coastlines(resolution='10m', color='k')
+ax.add_feature(cfeature.LAND, zorder=100, edgecolor='k', facecolor='0.8')
+ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
+plt.colorbar(pc, ax=ax, orientation='vertical', label='Depth (m)')
+plt.title('Bathymetry (h) on ROMS Grid')
+plt.tight_layout()
+plt.show()
 
 # Create ROMS grid xarray Dataset and save to NetCDF
 # Create the dataset
@@ -354,45 +397,3 @@ ds_out.attrs = {
 # Save to NetCDF file
 ds_out.to_netcdf(os.path.join(base_path, 'output', output_nc))
 
-
-fig, ax = plt.subplots(figsize=(10, 6))
-c = ax.pcolormesh(lon_rho_grid[1:,1:], lat_rho_grid[1:,1:], sp, cmap=cmocean.cm.deep, shading='auto')
-ax.set_xlabel('Longitude')
-ax.set_ylabel('Latitude')
-cb = fig.colorbar(c, ax=ax, label='Slope Parameter')
-ax.set_aspect('auto')
-c.set_clim(0,0.2)
-
-plot_dir = os.path.join(base_path, 'plots')
-os.makedirs(plot_dir, exist_ok=True)
-plot_path = os.path.join(plot_dir, 'roms_grid_slope_parameter.png')
-plt.savefig(plot_path, dpi=200, bbox_inches='tight')
-plt.close(fig)
-
-fig, ax = plt.subplots(figsize=(10, 6))
-c = ax.pcolormesh(lon_rho_grid, lat_rho_grid, -h, cmap=cmocean.cm.deep, shading='auto')
-yind, xind = np.where(sp > 0.2)
-ax.scatter(lon_rho_grid[yind, xind], lat_rho_grid[yind, xind], color='red', s=1, label='Slope > 0.2')
-ax.set_xlabel('Longitude')
-ax.set_ylabel('Latitude')
-cb = fig.colorbar(c, ax=ax, label='Depth')
-ax.set_aspect('auto')
-
-plot_dir = os.path.join(base_path, 'plots')
-os.makedirs(plot_dir, exist_ok=True)
-plot_path = os.path.join(plot_dir, 'roms_grid_bathy.png')
-plt.savefig(plot_path, dpi=200, bbox_inches='tight')
-plt.close(fig)
-
-fig, ax = plt.subplots(figsize=(10, 6))
-c = ax.pcolormesh(lon_rho_grid, lat_rho_grid, mask_rho, cmap=cmocean.cm.deep, shading='auto')
-ax.set_xlabel('Longitude')
-ax.set_ylabel('Latitude')
-cb = fig.colorbar(c, ax=ax)
-ax.set_aspect('auto')
-
-plot_dir = os.path.join(base_path, 'plots')
-os.makedirs(plot_dir, exist_ok=True)
-plot_path = os.path.join(plot_dir, 'roms_grid_mask.png')
-plt.savefig(plot_path, dpi=200, bbox_inches='tight')
-plt.close(fig)

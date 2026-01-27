@@ -7,4 +7,6 @@ plot/*.png
 output/*.nc
 __pycache__
 code/__pycache__/*.pyc
- 
+scripts/extra/*.py
+scripts/py_slurm*
+code/__pycache__/*.pyc 

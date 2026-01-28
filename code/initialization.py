@@ -372,6 +372,11 @@ class init_tools:
         # Get grid dimensions
         eta_rho, xi_rho, eta_v, xi_u, s_rho, s_w = grid_tools.get_grid_dims(grid)
         
+        # Extract scalar values for theta_s, theta_b, hc (handle both DataArray and scalar)
+        theta_s_val = float(grid.theta_s.values) if hasattr(grid.theta_s, 'values') else float(grid.theta_s)
+        theta_b_val = float(grid.theta_b.values) if hasattr(grid.theta_b, 'values') else float(grid.theta_b)
+        hc_val = float(grid.hc.values) if hasattr(grid.hc, 'values') else float(grid.hc)
+        
         ds = xr.Dataset(
             {
                 'temp': (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), temp[np.newaxis, :, :, :]),
@@ -400,9 +405,9 @@ class init_tools:
                 'ini_time': str(init_time),
                 'model_reference_date': "2000-01-01 00:00:00",
                 'source': source_name,
-                'theta_s': grid.theta_s,
-                'theta_b': grid.theta_b,
-                'hc': grid.hc,
+                'theta_s': theta_s_val,
+                'theta_b': theta_b_val,
+                'hc': hc_val,
             }
         )
         

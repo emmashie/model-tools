@@ -154,8 +154,10 @@ source_coords = init_tools.prepare_source_coords(
 )
 
 # Compute ROMS vertical coordinates
+# Convert hc to float if it's a DataArray to avoid broadcasting issues
+hc = float(grid.hc.values) if hasattr(grid.hc, 'values') else float(grid.hc)
 z_rho = grid_tools.compute_z(
-    grid.sigma_r.values, grid.hc, grid.Cs_r.values, 
+    grid.sigma_r.values, hc, grid.Cs_r.values, 
     grid.h.values, np.zeros((eta_rho, xi_rho, 1))
 )
 z_rho = np.squeeze(z_rho)  # Remove singleton dimension

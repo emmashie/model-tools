@@ -487,6 +487,18 @@ class grid_tools:
                     "long_name": "domain length in the ETA-direction",
                     "units": "meter"
                 }),
+                "hc": ((), sigma_params.get('hc', np.abs(global_attrs['hc'])), {
+                    "long_name": "S-coordinate critical depth",
+                    "units": "meter"
+                }),
+                "theta_s": ((), sigma_params.get('theta_s', global_attrs['theta_s']), {
+                    "long_name": "S-coordinate surface control parameter",
+                    "units": "nondimensional"
+                }),
+                "theta_b": ((), sigma_params.get('theta_b', global_attrs['theta_b']), {
+                    "long_name": "S-coordinate bottom control parameter",
+                    "units": "nondimensional"
+                }),
             },
             coords={
                 "eta_rho": np.arange(ny),

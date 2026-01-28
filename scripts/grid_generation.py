@@ -58,6 +58,7 @@ max_iter = 10        # Maximum iterations
 smooth_sigma = 6     # Smoothing strength for iterative method
 buffer_size = 5      # Buffer around steep regions
 
+
 # ============================================================================
 # GRID GENERATION - Uses grid_tools class for reusable operations
 # ============================================================================

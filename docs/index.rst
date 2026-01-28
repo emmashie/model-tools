@@ -25,6 +25,10 @@ ROMS Model Tools Documentation
    api/conversions
    api/interpolate
    api/download
+   api/data_sources
+   api/era5_forcing
+   api/visualization
+   api/netcdf_handler
 
 .. toctree::
    :maxdepth: 1

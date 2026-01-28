@@ -261,12 +261,14 @@ class grid_tools:
             buffer_size: Number of grid cells for buffer around steep regions
             
         Returns:
-            Smoothed bathymetry array
+            Smoothed bathymetry array (negative depths)
         """
         from scipy.ndimage import gaussian_filter, binary_dilation
         
         h_iter = h.copy()
         for i in range(max_iter):
+            # compute_rx0 expects positive depths, so pass np.abs(h_iter)
+            # Since h_iter contains negative depths, we need to use absolute values
             rx0_x, rx0_y = grid_tools.compute_rx0(np.abs(h_iter))
             # Pad rx0_x with an extra row in the y-direction
             rx0_x = np.pad(rx0_x, ((0, 0), (0, 1)), mode='edge')

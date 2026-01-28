@@ -1,11 +1,169 @@
 import numpy as np
 import xarray as xr
+from typing import Optional, Dict, Tuple, Union
+import os
 
 class init_tools:
     """Tools for creating ROMS initial condition files."""
     
     def __init__(self):
         pass
+    
+    @staticmethod
+    def load_glorys_data(
+        init_time: Union[str, np.datetime64],
+        lon_range: Tuple[float, float],
+        lat_range: Tuple[float, float],
+        use_api: bool = False,
+        netcdf_path: Optional[str] = None,
+        time_buffer_days: int = 1,
+        variables: Optional[list] = None
+    ) -> xr.Dataset:
+        """
+        Load GLORYS data from either a NetCDF file or via Copernicus Marine API.
+        
+        Args:
+            init_time: Initialization time as datetime64 or string
+            lon_range: (min_lon, max_lon) in degrees East
+            lat_range: (min_lat, max_lat) in degrees North
+            use_api: If True, use Copernicus Marine API. If False, use netcdf_path
+            netcdf_path: Path to existing NetCDF file (required if use_api=False)
+            time_buffer_days: Days before/after init_time to download (for API only)
+            variables: List of variables to load. Defaults to ['thetao', 'so', 'uo', 'vo', 'zos']
+            
+        Returns:
+            xarray.Dataset with GLORYS data
+            
+        Example:
+            >>> # Load from NetCDF file
+            >>> ds = init_tools.load_glorys_data(
+            ...     init_time='2024-01-01',
+            ...     lon_range=(-80.0, -60.0),
+            ...     lat_range=(30.0, 50.0),
+            ...     use_api=False,
+            ...     netcdf_path='/path/to/glorys_data.nc'
+            ... )
+            >>> 
+            >>> # Load via API
+            >>> ds = init_tools.load_glorys_data(
+            ...     init_time='2024-01-01',
+            ...     lon_range=(-80.0, -60.0),
+            ...     lat_range=(30.0, 50.0),
+            ...     use_api=True
+            ... )
+        """
+        if variables is None:
+            variables = ['thetao', 'so', 'uo', 'vo', 'zos']
+        
+        init_time = np.datetime64(init_time)
+        
+        if use_api:
+            from download import CopernicusMarineDownloader
+            
+            # Calculate time range with buffer
+            start_time = init_time - np.timedelta64(time_buffer_days, 'D')
+            end_time = init_time + np.timedelta64(time_buffer_days, 'D')
+            
+            # Convert to strings for API
+            start_str = np.datetime_as_string(start_time, unit='D')
+            end_str = np.datetime_as_string(end_time, unit='D')
+            
+            print(f"Loading GLORYS data via Copernicus Marine API...")
+            print(f"  Time range: {start_str} to {end_str}")
+            print(f"  Lon range: {lon_range}")
+            print(f"  Lat range: {lat_range}")
+            
+            downloader = CopernicusMarineDownloader()
+            ds = downloader.get_glorys_dataset(
+                lon_range=lon_range,
+                lat_range=lat_range,
+                time_range=(start_str, end_str),
+                variables=variables,
+                use_daily=True
+            )
+            
+            print(f"Successfully loaded data via API")
+            
+        else:
+            if netcdf_path is None:
+                raise ValueError("netcdf_path is required when use_api=False")
+            
+            if not os.path.exists(netcdf_path):
+                raise FileNotFoundError(f"NetCDF file not found: {netcdf_path}")
+            
+            print(f"Loading GLORYS data from NetCDF file: {netcdf_path}")
+            ds = xr.open_dataset(netcdf_path)
+            print(f"Successfully loaded data from file")
+        
+        return ds
+    
+    @staticmethod
+    def download_and_cache_glorys(
+        init_time: Union[str, np.datetime64],
+        lon_range: Tuple[float, float],
+        lat_range: Tuple[float, float],
+        output_path: str,
+        time_buffer_days: int = 1,
+        variables: Optional[list] = None,
+        force_download: bool = False
+    ) -> str:
+        """
+        Download GLORYS data via API and cache it as a NetCDF file.
+        
+        This is useful for workflows that want to download once and reuse the data.
+        
+        Args:
+            init_time: Initialization time as datetime64 or string
+            lon_range: (min_lon, max_lon) in degrees East
+            lat_range: (min_lat, max_lat) in degrees North
+            output_path: Path to save the NetCDF file
+            time_buffer_days: Days before/after init_time to download
+            variables: List of variables to download. Defaults to ['thetao', 'so', 'uo', 'vo', 'zos']
+            force_download: If True, re-download even if file exists
+            
+        Returns:
+            Path to the cached NetCDF file
+            
+        Example:
+            >>> file_path = init_tools.download_and_cache_glorys(
+            ...     init_time='2024-01-01',
+            ...     lon_range=(-80.0, -60.0),
+            ...     lat_range=(30.0, 50.0),
+            ...     output_path='cached_glorys.nc'
+            ... )
+        """
+        from download import CopernicusMarineDownloader
+        
+        if variables is None:
+            variables = ['thetao', 'so', 'uo', 'vo', 'zos']
+        
+        init_time = np.datetime64(init_time)
+        
+        # Calculate time range with buffer
+        start_time = init_time - np.timedelta64(time_buffer_days, 'D')
+        end_time = init_time + np.timedelta64(time_buffer_days, 'D')
+        
+        # Convert to strings for API
+        start_str = np.datetime_as_string(start_time, unit='D')
+        end_str = np.datetime_as_string(end_time, unit='D')
+        
+        print(f"Downloading GLORYS data to {output_path}...")
+        print(f"  Time range: {start_str} to {end_str}")
+        print(f"  Lon range: {lon_range}")
+        print(f"  Lat range: {lat_range}")
+        
+        downloader = CopernicusMarineDownloader()
+        file_path = downloader.download_glorys_dataset(
+            output_path=output_path,
+            lon_range=lon_range,
+            lat_range=lat_range,
+            time_range=(start_str, end_str),
+            variables=variables,
+            use_daily=True,
+            force_download=force_download
+        )
+        
+        return file_path
     
     @staticmethod
     def add_deep_ocean_layer(dataset, new_depth, fill_values, time_var='time', 

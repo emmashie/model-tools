@@ -27,7 +27,24 @@ import os
 base_path = '/global/cfs/cdirs/m4304/enuss/model-tools/'
 grid_nc = 'roms_grid_1km_smoothed.nc' 
 forcing_datapath = '/global/cfs/cdirs/m4304/enuss/US_East_Coast/Forcing_Data'
-output_nc = 'initial_conditions_1km.nc'
+output_nc = 'initial_conditions_api.nc'
+
+# ============================================================================
+# DATA SOURCE CONFIGURATION
+# Choose between NetCDF file or Copernicus Marine API
+# ============================================================================
+
+# Set to True to use Copernicus Marine API, False to use local NetCDF file
+USE_API = True
+
+# If USE_API is False, specify path to existing NetCDF file
+NETCDF_PATH = '/global/cfs/cdirs/m4304/enuss/US_East_Coast/Forcing_Data/GLORYS_data/GLORYS_January.nc'
+
+# If USE_API is True, these parameters define the spatial/temporal extent
+# (The lon/lat ranges can be auto-detected from the grid if set to None)
+API_LON_RANGE = None  # e.g., (-80.0, -60.0) or None to auto-detect
+API_LAT_RANGE = None  # e.g., (30.0, 50.0) or None to auto-detect
+API_TIME_BUFFER_DAYS = 1  # Days before/after init_time to download
 
 # Initialization time
 init_time = np.datetime64('2024-01-01T00:00:00')
@@ -73,8 +90,43 @@ min_temp = 0.1  # degrees Celsius
 # Load the grid 
 grid = xr.open_dataset(os.path.join(base_path, 'output', grid_nc))
 
-# Load initialization data 
-init_data = xr.open_dataset(os.path.join(forcing_datapath, 'GLORYS_data', 'GLORYS_January.nc'))
+# Auto-detect lon/lat ranges from grid if not specified
+if USE_API and (API_LON_RANGE is None or API_LAT_RANGE is None):
+    lon_min, lon_max = float(grid.lon_rho.min()), float(grid.lon_rho.max())
+    lat_min, lat_max = float(grid.lat_rho.min()), float(grid.lat_rho.max())
+    
+    # Add buffer for interpolation
+    lon_buffer = (lon_max - lon_min) * 0.1
+    lat_buffer = (lat_max - lat_min) * 0.1
+    
+    if API_LON_RANGE is None:
+        API_LON_RANGE = (lon_min - lon_buffer, lon_max + lon_buffer)
+    if API_LAT_RANGE is None:
+        API_LAT_RANGE = (lat_min - lat_buffer, lat_max + lat_buffer)
+    
+    print(f"Auto-detected spatial extent from grid:")
+    print(f"  Longitude: {API_LON_RANGE}")
+    print(f"  Latitude: {API_LAT_RANGE}")
+
+# Load initialization data
+if USE_API:
+    print("\n=== Loading data via Copernicus Marine API ===")
+    init_data = init_tools.load_glorys_data(
+        init_time=init_time,
+        lon_range=API_LON_RANGE,
+        lat_range=API_LAT_RANGE,
+        use_api=True,
+        time_buffer_days=API_TIME_BUFFER_DAYS
+    )
+else:
+    print("\n=== Loading data from NetCDF file ===")
+    init_data = init_tools.load_glorys_data(
+        init_time=init_time,
+        lon_range=None,  # Not used for file loading
+        lat_range=None,  # Not used for file loading
+        use_api=False,
+        netcdf_path=NETCDF_PATH
+    )
 
 # Add deep ocean layer to prevent extrapolation issues
 init_data = init_tools.add_deep_ocean_layer(
@@ -171,7 +223,26 @@ print(f"V velocity shape: {v_interp.shape}")
 
 print("\n=== Interpolating Sea Surface Height ===")
 zeta_data = source_time_step[source_vars['zeta']].values
-zeta_data = zeta_data[0, :, :]  # Select surface level
+# Find the surface by identifying which dimension doesn't match x/y
+zeta_shape = zeta_data.shape
+expected_y = source_coords['lat_2d'].shape[0]
+expected_x = source_coords['lon_2d'].shape[1]
+
+# Determine which axis is the depth/vertical dimension
+if len(zeta_shape) == 3:
+    # Find which dimension doesn't match expected x or y
+    for i, dim_size in enumerate(zeta_shape):
+        if dim_size != expected_y and dim_size != expected_x:
+            # This is likely the depth dimension, select surface (index 0)
+            zeta_data = np.take(zeta_data, 0, axis=i)
+            print(f"Selected surface level from axis {i}")
+            break
+elif len(zeta_shape) == 2:
+    # Already 2D, no selection needed
+    print("Zeta data is already 2D")
+else:
+    raise ValueError(f"Unexpected zeta_data shape: {zeta_shape}")
+
 zeta_interp = init_tools.interpolate_and_mask_2d(
     zeta_data,
     source_coords['lon_2d'], source_coords['lat_2d'],

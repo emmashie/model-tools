@@ -1,11 +1,201 @@
 import numpy as np
 import xarray as xr
+from typing import Optional, Dict, Tuple, Union, List
+import os
 
 class forcing_tools:
     """Tools for creating ROMS surface forcing files."""
     
     def __init__(self):
         pass
+    
+    @staticmethod
+    def load_era5_data(
+        time_range: Tuple[Union[str, np.datetime64], Union[str, np.datetime64]],
+        lon_range: Tuple[float, float],
+        lat_range: Tuple[float, float],
+        use_api: bool = False,
+        netcdf_paths: Optional[Union[str, Dict[str, str]]] = None,
+        hours: Optional[List[str]] = None,
+        include_radiation: bool = True,
+        force_download: bool = False
+    ) -> Union[xr.Dataset, Dict[str, xr.Dataset]]:
+        """
+        Load ERA5 data from either NetCDF file(s) or via CDS API.
+        
+        Args:
+            time_range: (start_time, end_time) as datetime64 or strings
+            lon_range: (min_lon, max_lon) in degrees East
+            lat_range: (min_lat, max_lat) in degrees North
+            use_api: If True, use CDS API. If False, use netcdf_paths
+            netcdf_paths: Path to NetCDF file or dict mapping dataset names to paths
+                         (e.g., {'main': 'era5.nc', 'rad': 'era5_rad.nc'})
+            hours: List of hours for API download (e.g., ['00:00', '06:00', '12:00', '18:00'])
+            include_radiation: Whether to include radiation variables (for API only)
+            force_download: If True, re-download even if file exists (for API only)
+            
+        Returns:
+            xarray.Dataset or dict of datasets
+            
+        Example:
+            >>> # Load from NetCDF file
+            >>> ds = forcing_tools.load_era5_data(
+            ...     time_range=('2024-01-01', '2024-01-31'),
+            ...     lon_range=(-80.0, -60.0),
+            ...     lat_range=(30.0, 50.0),
+            ...     use_api=False,
+            ...     netcdf_paths='era5_data.nc'
+            ... )
+            >>> 
+            >>> # Load via API
+            >>> ds = forcing_tools.load_era5_data(
+            ...     time_range=('2024-01-01', '2024-01-31'),
+            ...     lon_range=(-80.0, -60.0),
+            ...     lat_range=(30.0, 50.0),
+            ...     use_api=True,
+            ...     hours=['00:00', '06:00', '12:00', '18:00']
+            ... )
+        """
+        start_time = np.datetime64(time_range[0]) if not isinstance(time_range[0], np.datetime64) else time_range[0]
+        end_time = np.datetime64(time_range[1]) if not isinstance(time_range[1], np.datetime64) else time_range[1]
+        
+        # Convert to strings for API (convert numpy.str_ to Python str for pandas compatibility)
+        start_str = str(np.datetime_as_string(start_time, unit='D'))
+        end_str = str(np.datetime_as_string(end_time, unit='D'))
+        
+        if use_api:
+            from download import ERA5Downloader
+            
+            print(f"Loading ERA5 data via Copernicus Climate Data Store API...")
+            print(f"  Time range: {start_str} to {end_str}")
+            print(f"  Lon range: {lon_range}")
+            print(f"  Lat range: {lat_range}")
+            
+            # Use a temporary file name if netcdf_paths not provided
+            if netcdf_paths is None:
+                netcdf_paths = 'era5_forcing_temp.nc'
+            
+            if isinstance(netcdf_paths, dict):
+                output_path = netcdf_paths.get('main', 'era5_forcing_temp.nc')
+            else:
+                output_path = netcdf_paths
+            
+            downloader = ERA5Downloader()
+            file_path = downloader.download_era5_surface_forcing(
+                output_path=output_path,
+                lon_range=lon_range,
+                lat_range=lat_range,
+                time_range=(start_str, end_str),
+                hours=hours,
+                include_radiation=include_radiation,
+                force_download=force_download
+            )
+            
+            print(f"Successfully downloaded data via API to: {file_path}")
+            print(f"Current working directory: {os.getcwd()}")
+            print(f"Absolute file path: {os.path.abspath(file_path)}")
+            print(f"File exists: {os.path.exists(file_path)}")
+            if os.path.exists(file_path):
+                import subprocess
+                file_type = subprocess.run(['file', file_path], capture_output=True, text=True).stdout.strip()
+                print(f"File type: {file_type}")
+                print(f"File size: {os.path.getsize(file_path) / (1024**2):.2f} MB")
+            
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Downloaded file not found at: {file_path}")
+            
+            # Check if it's a zip file that needs extraction
+            import zipfile
+            if zipfile.is_zipfile(file_path):
+                raise RuntimeError(
+                    f"File {file_path} is still a zip archive and was not extracted. "
+                    f"This shouldn't happen - please report this bug. "
+                    f"Try running with force_download=True to re-download."
+                )
+            ds = xr.open_dataset(file_path)
+            
+        else:
+            if netcdf_paths is None:
+                raise ValueError("netcdf_paths is required when use_api=False")
+            
+            if isinstance(netcdf_paths, dict):
+                print(f"Loading ERA5 data from multiple NetCDF files...")
+                ds = {}
+                for key, path in netcdf_paths.items():
+                    if not os.path.exists(path):
+                        raise FileNotFoundError(f"NetCDF file not found: {path}")
+                    print(f"  Loading {key}: {path}")
+                    ds[key] = xr.open_dataset(path)
+            else:
+                if not os.path.exists(netcdf_paths):
+                    raise FileNotFoundError(f"NetCDF file not found: {netcdf_paths}")
+                print(f"Loading ERA5 data from NetCDF file: {netcdf_paths}")
+                ds = xr.open_dataset(netcdf_paths)
+            
+            print(f"Successfully loaded data from file(s)")
+        
+        return ds
+    
+    @staticmethod
+    def download_and_cache_era5(
+        time_range: Tuple[Union[str, np.datetime64], Union[str, np.datetime64]],
+        lon_range: Tuple[float, float],
+        lat_range: Tuple[float, float],
+        output_path: str,
+        hours: Optional[List[str]] = None,
+        include_radiation: bool = True,
+        force_download: bool = False
+    ) -> str:
+        """
+        Download ERA5 data via API and cache it as a NetCDF file.
+        
+        Args:
+            time_range: (start_time, end_time) as datetime64 or strings
+            lon_range: (min_lon, max_lon) in degrees East
+            lat_range: (min_lat, max_lat) in degrees North
+            output_path: Path to save the NetCDF file
+            hours: List of hours (e.g., ['00:00', '06:00', '12:00', '18:00']). None = all hours
+            include_radiation: Whether to include radiation variables
+            force_download: If True, re-download even if file exists
+            
+        Returns:
+            Path to the cached NetCDF file
+            
+        Example:
+            >>> file_path = forcing_tools.download_and_cache_era5(
+            ...     time_range=('2024-01-01', '2024-01-31'),
+            ...     lon_range=(-80.0, -60.0),
+            ...     lat_range=(30.0, 50.0),
+            ...     output_path='cached_era5_jan2024.nc',
+            ...     hours=['00:00', '06:00', '12:00', '18:00']
+            ... )
+        """
+        from download import ERA5Downloader
+        
+        start_time = np.datetime64(time_range[0]) if not isinstance(time_range[0], np.datetime64) else time_range[0]
+        end_time = np.datetime64(time_range[1]) if not isinstance(time_range[1], np.datetime64) else time_range[1]
+        
+        # Convert to Python strings for pandas compatibility
+        start_str = str(np.datetime_as_string(start_time, unit='D'))
+        end_str = str(np.datetime_as_string(end_time, unit='D'))
+        
+        print(f"Downloading ERA5 data to {output_path}...")
+        print(f"  Time range: {start_str} to {end_str}")
+        print(f"  Lon range: {lon_range}")
+        print(f"  Lat range: {lat_range}")
+        
+        downloader = ERA5Downloader()
+        file_path = downloader.download_era5_surface_forcing(
+            output_path=output_path,
+            lon_range=lon_range,
+            lat_range=lat_range,
+            time_range=(start_str, end_str),
+            hours=hours,
+            include_radiation=include_radiation,
+            force_download=force_download
+        )
+        
+        return file_path
     
     @staticmethod
     def prepare_forcing_coords(dataset, lat_var='latitude', lon_var='longitude'):

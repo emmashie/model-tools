@@ -27,12 +27,35 @@ base_path = '/global/cfs/cdirs/m4304/enuss/model-tools'
 grid_nc = 'roms_grid_1km_smoothed.nc' 
 forcing_datapath = '/global/cfs/cdirs/m4304/enuss/US_East_Coast/Forcing_Data'
 
+# ============================================================================
+# DATA SOURCE CONFIGURATION
+# Choose between NetCDF files or Copernicus Climate Data Store API
+# ============================================================================
+
+# Set to True to use CDS API, False to use local NetCDF files
+USE_API = True
+
+# If USE_API is False, specify paths to existing NetCDF files
+# Can be a single file or dictionary for multiple files
+NETCDF_PATHS = {
+    'main': os.path.join(forcing_datapath, 'ERA5_data.nc'),
+    'pair': os.path.join(forcing_datapath, 'ERA5_Pair.nc'),
+    'rad': os.path.join(forcing_datapath, 'ERA5_rad.nc')
+}
+# Or use a single file: NETCDF_PATHS = 'era5_forcing.nc'
+
+# If USE_API is True, these parameters define the download
+API_LON_RANGE = None  # e.g., (-80.0, -60.0) or None to auto-detect from grid
+API_LAT_RANGE = None  # e.g., (30.0, 50.0) or None to auto-detect from grid
+API_HOURS = ['00:00', '06:00', '12:00', '18:00']  # Time resolution, None = all hours
+API_INCLUDE_RADIATION = True  # Include radiation variables
+
 # Time range for forcing
 start_time = np.datetime64('2024-01-01T00:00:00')
 end_time = np.datetime64('2024-01-02T00:00:00')
 
 # Output file
-output_file = os.path.join(base_path, 'output', 'surface_forcing.nc')
+output_file = os.path.join(base_path, 'output', 'surface_forcing_api.nc')
 
 # ERA5 variable names
 era5_vars = {
@@ -53,17 +76,70 @@ era5_vars = {
 # LOAD DATA
 # ============================================================================
 
-# Load datasets
-era5 = xr.open_dataset(os.path.join(forcing_datapath, 'ERA5_data.nc'))
-era5_pair = xr.open_dataset(os.path.join(forcing_datapath, 'ERA5_Pair.nc'))
-era5_rad = xr.open_dataset(os.path.join(forcing_datapath, 'ERA5_rad.nc'))
+# Load grid
 grid = xr.open_dataset(os.path.join(base_path, 'output', grid_nc))
 
-era5_datasets = {
-    'main': era5,
-    'pair': era5_pair,
-    'rad': era5_rad
-}
+# Auto-detect lon/lat ranges from grid if not specified
+if USE_API and (API_LON_RANGE is None or API_LAT_RANGE is None):
+    lon_min, lon_max = float(grid.lon_rho.min()), float(grid.lon_rho.max())
+    lat_min, lat_max = float(grid.lat_rho.min()), float(grid.lat_rho.max())
+    
+    # Add buffer for interpolation
+    lon_buffer = (lon_max - lon_min) * 0.1
+    lat_buffer = (lat_max - lat_min) * 0.1
+    
+    if API_LON_RANGE is None:
+        API_LON_RANGE = (lon_min - lon_buffer, lon_max + lon_buffer)
+    if API_LAT_RANGE is None:
+        API_LAT_RANGE = (lat_min - lat_buffer, lat_max + lat_buffer)
+    
+    print(f"Auto-detected spatial extent from grid:")
+    print(f"  Longitude: {API_LON_RANGE}")
+    print(f"  Latitude: {API_LAT_RANGE}")
+
+# Load ERA5 forcing data
+if USE_API:
+    print("\n=== Loading data via Copernicus Climate Data Store API ===")
+    era5_data = forcing_tools.load_era5_data(
+        time_range=(start_time, end_time),
+        lon_range=API_LON_RANGE,
+        lat_range=API_LAT_RANGE,
+        use_api=True,
+        hours=API_HOURS,
+        include_radiation=API_INCLUDE_RADIATION
+    )
+    # API returns a single dataset with all variables
+    era5_datasets = {'main': era5_data, 'pair': era5_data, 'rad': era5_data}
+    era5 = era5_data
+    era5_pair = era5_data
+    era5_rad = era5_data
+else:
+    print("\n=== Loading data from NetCDF files ===")
+    if isinstance(NETCDF_PATHS, dict):
+        era5_data = forcing_tools.load_era5_data(
+            time_range=(start_time, end_time),
+            lon_range=None,
+            lat_range=None,
+            use_api=False,
+            netcdf_paths=NETCDF_PATHS
+        )
+        era5_datasets = era5_data
+        era5 = era5_data['main']
+        era5_pair = era5_data.get('pair', era5_data['main'])
+        era5_rad = era5_data.get('rad', era5_data['main'])
+    else:
+        # Single file
+        era5_data = forcing_tools.load_era5_data(
+            time_range=(start_time, end_time),
+            lon_range=None,
+            lat_range=None,
+            use_api=False,
+            netcdf_paths=NETCDF_PATHS
+        )
+        era5_datasets = {'main': era5_data}
+        era5 = era5_data
+        era5_pair = era5_data
+        era5_rad = era5_data
 
 # ============================================================================
 # PROCESS ERA5 DATA - Convert variables and apply time filtering
